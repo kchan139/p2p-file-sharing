@@ -34,4 +34,6 @@ P2P File Sharing/            # root
 │   └── utils.py             # utility functions
 ├── tests/                   # test suite
 │   └── unit_test.py         # unit tests
+├── .gitignore
+└── README.md
 ```
