@@ -17,7 +17,7 @@ class Node:
         self.port = port
         self.address = f"{ip}:{port}"
 
-    def update(self, event):
+    def update(self, event: dict):
         """
         Handles updates from the tracker.
 
