@@ -34,7 +34,7 @@ class Tracker(Subject):
         super().__init__()
         self.peers = {}  # Format: { "ip:port": [piece_hashes] }
 
-    def register_peer(self, address, pieces):
+    def register_peer(self, address: str, pieces: list):
         """
         Registers a new peer and notifies all observers.
 
@@ -44,3 +44,10 @@ class Tracker(Subject):
         """
         self.peers[address] = pieces
         self.notify({"type": "peer_joined", "address": address})
+
+    def update_pieces(self, address: str, pieces: list):
+        if address in self.peers:
+            self.peers[address].extend(pieces)
+            self.notify({"type": "pieces_updated", "address": address, "pieces": pieces})
+        else:
+            self.register_peer(address, pieces)
