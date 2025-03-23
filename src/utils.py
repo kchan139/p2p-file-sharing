@@ -6,7 +6,7 @@ def setup_logger(name):
     return logging.getLogger(name)
 
 def serialize(data):
-    return str(data).encode()
+    return repr(data).encode()
 
 def deserialize(data):
     return eval(data.decode())
