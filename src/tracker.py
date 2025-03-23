@@ -20,8 +20,12 @@ class Subject:
             self._observers.append(observer)
 
     def notify(self, event):
-        for observer in self._observers:
-            observer.update(event)
+        message = f"NOTIFY {event}".encode()
+        for connection in self._observers.copy():
+            try:
+                connection.send(message)
+            except (BrokenPipeError, OSError):
+                self._observers.remove(connection)
 
 class Tracker(Subject):
     """
@@ -50,14 +54,34 @@ class Tracker(Subject):
             peer_connection, peer_address = self.server.accept()
             Thread(target=self.handle_peer, args=(peer_connection,)).start()
 
+
     def handle_peer(self, peer_connection):
         """Process peer registration messages"""
-        data = peer_connection.recv(1024).decode()
-        if data.startswith("REGISTER"):
-            address = data.split()[1]
-            self.register_peer(address, [])
-            peer_connection.send(b"Registration successful")
-        peer_connection.close()
+        try:
+            while True:
+                data = peer_connection.recv(1024).decode()
+                if not data:
+                    break
+                if data.startswith("REGISTER"):
+                    address = data.split()[1]
+                    if address not in self.peers:
+                        self.register_peer(address, [])
+                        self.attach(peer_connection)
+                    peer_connection.send(b"REGISTERED")
+        except ConnectionResetError:
+            print(f"Peer disconnected: {address}")
+        finally:
+            peer_connection.close()
+            if address in self.peers:
+                del self.peers[address]
+                self.notify({"type": "peer_left", "address": address})
+
+        # data = peer_connection.recv(1024).decode()
+        # if data.startswith("REGISTER"):
+        #     address = data.split()[1]
+        #     self.register_peer(address, [])
+        #     peer_connection.send(b"Registration successful")
+        # peer_connection.close()
 
 
     def register_peer(self, address: str, pieces: list):
@@ -68,8 +92,12 @@ class Tracker(Subject):
             address (str): The peer's address (IP:port).
             pieces (list): List of file piece hashes the peer has.
         """
+        if address in self.peers:
+            print(f"Peer {address} already registered")
+            return
+        
         self.peers[address] = pieces
-        self.attach(Node(address.split(':')[0], int(address.split(':')[1])))
+        # self.attach(Node(address.split(':')[0], int(address.split(':')[1])))
         print(f"Registered new peer: {address}")
         self.notify({"type": "peer_joined", "address": address})
 
