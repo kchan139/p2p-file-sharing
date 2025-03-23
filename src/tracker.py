@@ -1,4 +1,8 @@
 # src/tracker.py
+from socket import *
+from threading import Thread
+from src.node import Node
+from src.config import DEFAULTS
 
 class Subject:
     """
@@ -34,6 +38,28 @@ class Tracker(Subject):
         super().__init__()
         self.peers = {}  # Format: { "ip:port": [piece_hashes] }
 
+
+    def start_server(self):
+        """Start listening for Peers connection"""
+        self.server = socket(AF_INET, SOCK_STREAM)
+        self.server.bind((DEFAULTS["tracker_host"], DEFAULTS["tracker_port"]))
+        self.server.listen()
+        print(f"Tracker running on {DEFAULTS["tracker_host"]}:{DEFAULTS["tracker_port"]}")
+
+        while True:
+            peer_connection, peer_address = self.server.accept()
+            Thread(target=self.handle_peer, args=(peer_connection,)).start()
+
+    def handle_peer(self, peer_connection):
+        """Process peer registration messages"""
+        data = peer_connection.recv(1024).decode()
+        if data.startswith("REGISTER"):
+            address = data.split()[1]
+            self.register_peer(address, [])
+            peer_connection.send(b"Registration successful")
+        peer_connection.close()
+
+
     def register_peer(self, address: str, pieces: list):
         """
         Registers a new peer and notifies all observers.
@@ -43,7 +69,10 @@ class Tracker(Subject):
             pieces (list): List of file piece hashes the peer has.
         """
         self.peers[address] = pieces
+        self.attach(Node(address.split(':')[0], int(address.split(':')[1])))
+        print(f"Registered new peer: {address}")
         self.notify({"type": "peer_joined", "address": address})
+
 
     def update_pieces(self, address: str, pieces: list):
         if address in self.peers:
