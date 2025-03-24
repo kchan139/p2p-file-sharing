@@ -6,7 +6,7 @@ def write_file_contents(output_file):
         output_file (str): The name of the file to write the contents to.
     """
     files_to_read = [
-        # "./data", 
+        "./data", 
         "./src/config.py",
         "./src/node.py",
         "./src/torrent.py",
@@ -17,8 +17,8 @@ def write_file_contents(output_file):
         "./reference/code/deal_torrent.py",
         "./reference/code/merge.py",
         "./reference/code/tracker.py",
-        "./reference/code/metainfor.torrent",
-        "./reference/docs/HK241_Assignment1",
+        "./reference/code/metainfo.torrent",
+        "./reference/docs/HK241_Assignment1.md",
     ]
 
     with open(output_file, "w", encoding="utf-8") as f:
