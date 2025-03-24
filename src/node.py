@@ -3,7 +3,12 @@ from socket import *
 import threading
 from src.config import DEFAULTS
 
-class Node:
+class Observer:
+    def update(self):
+        pass
+
+
+class Node(Observer):
     """
     Represents a network node in the P2P system.
 
@@ -15,7 +20,7 @@ class Node:
     Methods:
         update(event): Handles events received from the tracker.
     """
-    def __init__(self, ip, port):
+    def __init__(self, ip:str, port:int):
         self.ip = ip
         self.port = port
         self.address = f"{ip}:{port}"
@@ -30,7 +35,7 @@ class Node:
         Args:
             event (dict): The event information, containing a 'type' key.
         """
-        print(f"Node {self.address} received update {event['type']}")
+        print(f"Node {self.address} received update {event['type']}, address: {event['address']}")
 
 
     def connect_to_tracker(self):
@@ -62,7 +67,7 @@ class Node:
             try:
                 data = self.tracker_socket.recv(1024).decode()
                 if data.startswith("NOTIFY"):
-                    event = eval(data[6:])
+                    event = eval(data.split(maxsplit=1)[1])
                     self.update(event)
             except (ConnectionResetError, OSError):
                 print("Disconnected from tracker")

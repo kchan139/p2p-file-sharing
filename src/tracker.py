@@ -26,6 +26,7 @@ class Subject:
                 connection.send(message)
             except (BrokenPipeError, OSError):
                 self._observers.remove(connection)
+                
 
 class Tracker(Subject):
     """
