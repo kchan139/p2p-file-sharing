@@ -1,8 +1,8 @@
 # src/tracker.py
 from socket import *
 from threading import Thread
-from src.node import Node
-from src.config import DEFAULTS
+from node import Node
+from config import DEFAULTS
 
 class Subject:
     """

@@ -1,7 +1,7 @@
 # src/node.py
 from socket import *
 import threading
-from src.config import DEFAULTS
+from config import DEFAULTS
 
 class Observer:
     def update(self):
