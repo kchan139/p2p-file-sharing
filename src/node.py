@@ -26,6 +26,9 @@ class Node(Observer):
         self.address = f"{ip}:{port}"
         self.is_connected = False
         self.listener_thread = None
+        self.active_torrents = {}
+        self.peer_connections = {}
+        self.available_pieces = {}
 
 
     def update(self, event: dict):
@@ -42,7 +45,7 @@ class Node(Observer):
         """Establish connection to Tracker"""
         if self.is_connected == True:
             print("Already connected to Tracker")
-            return
+            return True
         try:
             self.tracker_socket = socket(AF_INET, SOCK_STREAM)
             self.tracker_socket.connect(
@@ -57,9 +60,11 @@ class Node(Observer):
             self.listener_thread.start()
             
             print(f"Connected to Tracker at {DEFAULTS['tracker_host']}:{DEFAULTS['tracker_port']}")
+            return True
 
         except ConnectionRefusedError:
             print("Tracker unavailable!")
+            return False
     
 
     def listen_to_tracker(self):
@@ -73,3 +78,6 @@ class Node(Observer):
                 print("Disconnected from tracker")
                 break
 
+
+    def load_torrent():
+        pass
