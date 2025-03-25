@@ -100,7 +100,7 @@ class Tracker(Subject):
         self.peers[address] = pieces
         # self.attach(Node(address.split(':')[0], int(address.split(':')[1])))
         print(f"Registered new peer: {address}")
-        self.notify({"type": "peer_joined", "address": address})
+        self.notify({"type": "Peer joined", "address": address})
 
 
     def update_pieces(self, address: str, pieces: list):

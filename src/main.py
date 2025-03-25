@@ -110,6 +110,7 @@ def run_node_shell(node: Node):
                 print_node_manual()
         except KeyboardInterrupt:
             print("Stopped node shell")
+            break
 
 
 
