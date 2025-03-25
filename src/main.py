@@ -85,17 +85,28 @@ def run_node_shell(node: Node):
             elif command == 'list':
                 if not node.active_torrents:
                     print("No torrents loaded")
+                    continue
                 else:
-                    print(node.active_torrents)
+                    print("\nLoaded torrents:")
+                    for name, torrent in node.active_torrents.items():
+                        total_pieces = len(torrent.piece_hashes)
+                        downloaded = 0
+                        print(f"{name} - {downloaded}/{total_pieces} pieces ({(downloaded/total_pieces*100 if total_pieces else 0):.1f}%)")
 
             elif command == 'peers':
-                # TO-DO
-                pass
+                if not node.peer_connections:
+                    print("No connected peers")
+                    continue
+                else:
+                    print("\nConnected peers:")
+                    for peer_addr, _ in node.peer_connections.items():
+                        print(f"Peer address: {peer_addr}")
 
             elif command == 'clear':
                 os.system('cls' if os.name == 'nt' else 'clear')
             
             else:
+                print(f"Unknown command: {command}", end="")
                 print_node_manual()
         except KeyboardInterrupt:
             print("Stopped node shell")
@@ -103,13 +114,13 @@ def run_node_shell(node: Node):
 
 
 def print_node_manual():
-    print("\nNode Commands:")
+    print("\nAvailable Commands:")
     print("  load <torrent_file>        - Load a torrent file")
     print("  download <torrent_name>    - Download a torrent")
     print("  list                       - List loaded torrents")
     print("  peers                      - List connected peers")
     print("  clear                      - Clear shell output")
-    print("  help/h                     - List all available commands")
+    print("  help/h                     - List all node commands")
     print("  quit/exit/q                - Exit")
 
 if __name__ == "__main__":
