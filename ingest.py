@@ -24,7 +24,7 @@ def write_file_contents(output_file):
         # "./reference/code/merge.py",
         # "./reference/code/tracker.py",
         # "./reference/code/metainfo.torrent",
-        "./reference/docs/HK241_Assignment1.md",
+        "./reference/docs/Specification.md",
     ]
 
     with open(output_file, "w", encoding="utf-8") as f:
