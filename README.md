@@ -24,16 +24,32 @@ pip install -r requirements.txt # Install dependencies
 
 ## 📂 Project Structure
 ```
-P2P File Sharing/            # root
-├── data/                    # storage
-├── src/                     # source code
-│   ├── config.py            # configurations
-│   ├── node.py              # peer node
-│   ├── torrent.py           # torrent file parser
-│   ├── tracker.py           # central tracker server
-│   └── utils.py             # utility functions
-├── tests/                   # test suite
-│   └── unit_test.py         # unit tests
+P2P File Sharing/                  
+├── data/                        
+├── src/                         
+│   ├── config.py                # Configurations (unchanged)
+│   ├── core/                    
+│   │   ├── node.py              # Main Node class (uses patterns)
+│   │   └── tracker.py           # Tracker (Observer pattern)
+│   ├── network/
+│   │   ├── connection.py        # Connection handling (Template Method)
+│   │   └── messages.py          # Message Factory pattern
+│   ├── strategies/              
+│   │   ├── piece_selection.py   # Strategy pattern (RarestFirst/Random)
+│   │   └── choking.py           # Choke algorithm strategies
+│   ├── states/                  # State pattern
+│   │   ├── leecher_state.py     
+│   │   └── seeder_state.py      
+│   ├── torrent/                 
+│   │   └── parser.py            # Torrent file parsing
+│   └── utils/                   
+│       ├── serialization.py     
+│       └── logger.py            
+├── tests/                       # Mirror src structure
+│   ├── strategies/              
+│   ├── states/                  
+│   ├── network/                 
+│   └── unit_test.py             
 ├── .gitignore
 └── README.md
 ```
