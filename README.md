@@ -45,10 +45,12 @@ P2P File Sharing/
 │   └── utils/                   
 │       ├── serialization.py     
 │       └── logger.py            
-├── tests/                       # Mirror src structure
-│   ├── strategies/              
-│   ├── states/                  
-│   ├── network/                 
+├── tests/                       # Mirror src structure                  
+│   ├── core/                
+│   ├── network/               
+│   ├── states/     
+│   ├── strategies/                   
+│   ├── torrent/            
 │   └── unit_test.py             
 ├── .gitignore
 └── README.md
