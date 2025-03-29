@@ -24,8 +24,7 @@ pip install -r requirements.txt # Install dependencies
 
 ## 📂 Project Structure
 ```
-P2P File Sharing/                  
-├── data/                        
+P2P File Sharing/
 ├── src/                         
 │   ├── config.py                # Configurations (unchanged)
 │   ├── core/                    

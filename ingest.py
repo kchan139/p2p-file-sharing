@@ -6,7 +6,6 @@ def write_file_contents(output_file):
         output_file (str): The name of the file to write the contents to.
     """
     files_to_read = [
-        "./data", 
         "./src/core/node.py",
         "./src/core/tracker.py",
         "./src/network/connection.py",
