@@ -60,7 +60,7 @@ class Node:
         accept_thread.start()
 
         # Start request processor thread
-        request_thread = threading.Thread(target=self._manage_choking, daemon=True)
+        request_thread = threading.Thread(target=self._process_request_queue, daemon=True)
         request_thread.start()
 
         # Start choking manager thread
