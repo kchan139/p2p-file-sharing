@@ -76,9 +76,8 @@ class TestTracker(unittest.TestCase):
         
         # Trigger health check
         with patch.object(self.tracker, '_remove_peer') as mock_remove:
-            self.tracker._check_peer_health()
-
-            # Verify inactive peer (address1) was removed
+            self.tracker._perform_health_check()
+            # Verify inactive peer was removed
             mock_remove.assert_called_once_with(address1)
     
     def test_process_peer_joined_message(self):
