@@ -68,7 +68,7 @@ class SocketWrapper:
     def __init__(self, host: str, port: int,
                  connect_timeout: float = 5.0,
                  retry_interval: float = 2.0,
-                 max_retries: int = 5):
+                 max_retries: int = 3):
         self.host = host
         self.port = port
         self.connect_timeout = connect_timeout
@@ -94,6 +94,7 @@ class SocketWrapper:
                 return True
             
             except (socket.timeout, ConnectionRefusedError, OSError) as e:
+                print(f"Connection attempt {retries+1} failed: {e}!")
                 if self.socket:
                     self.socket.close()
                     self.socket = None
