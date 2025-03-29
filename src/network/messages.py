@@ -31,7 +31,7 @@ class Message:
             "type": self.msg_type,
             "payload": self.payload
         }
-        return json.dumps(data.decode('utf-8'))
+        return json.dumps(data).encode('utf-8')
     
     @classmethod
     def deserialize(cls, data: bytes) -> 'Message':
