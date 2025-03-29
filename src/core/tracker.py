@@ -113,21 +113,26 @@ class Tracker(Subject):
             response = MessageFactory.peer_list(peers)
             client_socket.sendall(response)
 
-    def _check_peer_health(self) -> None:
-        """Check and remove inactive peers periodically."""
-        while self._running:
-            time.sleep(60) # Check every minute
-            current_time = time.time()
-            peers_to_remove = []
-
-            with self.lock:
-                for address, info in self.active_peers.items():
-                    # If peer is inactive for 5 minutes, consider it disconnected
-                    if current_time - info["last_seen"] > 300:
-                        peers_to_remove.append(address)
-
-                for address in peers_to_remove:
-                    self._remove_peer(address)
+    def _check_peer_health(self):
+        """Check and remove inactive peers periodically"""
+        while self.running:
+            time.sleep(60)  # Check every minute
+            self._perform_health_check()
+            
+    def _perform_health_check(self):
+        """Perform the actual health check logic (separated for testing)"""
+        current_time = time.time()
+        peers_to_remove = []
+        
+        with self.lock:
+            for address, info in self.active_peers.items():
+                # If peer hasn't been seen in 5 minutes, consider it disconnected
+                if current_time - info["last_seen"] > 300:
+                    peers_to_remove.append(address)
+        
+            # Remove inactive peers
+            for address in peers_to_remove:
+                self._remove_peer(address)
 
     def _remove_peer(self, address: tuple[str, int]) -> None:
         """Remove a peer from the active peer list."""
