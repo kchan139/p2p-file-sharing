@@ -8,7 +8,9 @@ class Message:
         "peer_joined",
         "peer_list",
         "piece_request",
-        "piece_response"
+        "piece_response",
+        "update_pieces",
+        "get_peers"
     ]
 
     def __init__(self, msg_type: str, payload: Dict[str, Any]):
