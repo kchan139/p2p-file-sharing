@@ -128,3 +128,17 @@ class MessageFactory:
             "data": data.hex()
         })
         return message.serialize()
+    
+    @staticmethod
+    def update_pieces(pieces: List[int]) -> bytes:
+        """
+        Create a message for updating which pieces a peer has.
+        
+        Args:
+            pieces: List of piece IDs the peer has
+            
+        Returns:
+            bytes: Serialized message
+        """
+        message = Message("update_pieces", {"pieces": pieces})
+        return message.serialize()
