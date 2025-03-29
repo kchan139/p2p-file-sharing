@@ -57,7 +57,7 @@ class TestMessage(unittest.TestCase):
 class TestMessageFactory(unittest.TestCase):
     def test_register_message(self):
         address = "127.0.0.1:8000"
-        serialized = MessageFactory.peer_joined(address)
+        serialized = MessageFactory.register(address)
         deserialized = Message.deserialize(serialized)
         
         self.assertEqual(deserialized.msg_type, "peer_joined")

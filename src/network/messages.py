@@ -68,7 +68,7 @@ class MessageFactory:
     """Factory for creating different types of network messages."""
 
     @staticmethod
-    def peer_joined(address: str) -> bytes:
+    def register(address: str) -> bytes:
         """
         Create a message for registering a peer with the tracker.
 
