@@ -10,7 +10,8 @@ class Message:
         "piece_request",
         "piece_response",
         "update_pieces",
-        "get_peers"
+        "get_peers",
+        "cancel_request"
     ]
 
     def __init__(self, msg_type: str, payload: Dict[str, Any]):
@@ -96,6 +97,17 @@ class MessageFactory:
         """
         message = Message("peer_list", {"peers": peers})
         return message.serialize()
+
+    @staticmethod
+    def get_peers_from_tracker() -> bytes:
+        """
+        Create a message to request the peer list from the tracker
+
+        Returns:
+            bytes: serialized message
+        """
+        message = Message("get_peers", {})
+        return message.serialize()
     
     @staticmethod
     def piece_request(piece_id: int) -> bytes:
@@ -135,10 +147,24 @@ class MessageFactory:
         Create a message for updating which pieces a peer has.
         
         Args:
-            pieces: List of piece IDs the peer has
+            pieces: list of piece IDs the peer has
             
         Returns:
-            bytes: Serialized message
+            bytes: serialized message
         """
         message = Message("update_pieces", {"pieces": pieces})
+        return message.serialize()
+    
+    @staticmethod
+    def cancel_request(piece_id: int) -> bytes:
+        """
+        Create a message to cancel a specific piece request.
+
+        Args:
+            piece_id(int): id of the piece to cancel
+
+        Returns:
+            bytes: serialized message
+        """
+        message = Message("cancel_request", {"piece_id": piece_id})
         return message.serialize()
