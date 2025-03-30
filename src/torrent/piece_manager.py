@@ -2,7 +2,7 @@
 import os
 import hashlib
 import threading
-from typing import Dict, Set, List, Optional, Tuple
+from typing import List, Optional
 import time
 
 class PieceManager:
@@ -121,6 +121,14 @@ class PieceManager:
             # Verify and save asynchronously
             threading.Thread(target=self._verify_and_save_piece, args=(piece_id,), daemon=True).start()
             return True
+        
+    def get_piece_data(self, piece_id: int) -> Optional[bytes]:
+        with self.lock:
+            if piece_id not in self.completed_pieces:
+                return None
+            offset = piece_id * self.piece_size
+            self.file_handle.seek(offset)
+            return self.file_handle.read(self.piece_size)
     
     def _verify_and_save_piece(self, piece_id: int) -> None:
         """
