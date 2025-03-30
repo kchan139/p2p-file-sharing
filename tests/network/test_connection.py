@@ -23,7 +23,7 @@ class TestConnectionHandler(unittest.TestCase):
         self.handler.register_callback(callback)
         
         # Create a valid message
-        message = MessageFactory.peer_joined("127.0.0.1:8000")
+        message = MessageFactory.register("127.0.0.1:8000")
         
         # Simulate receiving data
         self.handler.handle_received_data(message)
