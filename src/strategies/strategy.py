@@ -6,13 +6,13 @@ class ChokingStrategy(ABC):
     """Abstract base class for peers choking strategies."""
 
     @abstractmethod
-    def select_unchoked_peers(self, peer_stat: Dict[str, Dict],
+    def select_unchoked_peers(self, peer_stats: Dict[str, Dict],
                               max_unchoked: int=4) -> Set[str]:
         """
         Select which peers to unchoke base on the strategy
 
         Args:
-            peer_stat(Dict[str, Dict]): dict mapping peer addresses to their stats
+            peer_stats(Dict[str, Dict]): dict mapping peer addresses to their stats
             max_unchoked(int): max number of peer to unchoke at once
 
         Returns:
