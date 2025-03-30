@@ -128,7 +128,7 @@ class EndgameState(NodeState):
             return
         
         for piece_id in needed_pieces:
-            peers_with_piece = self._get_peers_with_piece(piece_id)
+            peers_with_piece = self._get_peers_with_pieces(piece_id)
             if peers_with_piece:
                 # Request from at most 3 peers
                 for peer in peers_with_piece[:3]:
