@@ -7,6 +7,7 @@ import threading
 from typing import List, Dict, Optional, Set
 
 from src.strategies.piece_selection import RarestFirstStrategy
+from src.states.node_state import NodeStateType
 from src.states.leecher_state import LeecherState
 from src.states.seeder_state import SeederState
 from src.network.messages import Message, MessageFactory
@@ -290,6 +291,10 @@ class Node:
             if piece_id and data_hex and piece_id in self.pending_requests:
                 data = bytes.fromhex(data_hex)
                 self._handle_piece_received(piece_id, data)
+
+        elif message.msg_type == "cancel_request":
+            piece_id = message.payload.get("piece_id")
+            print(f"Received cancel request for piece {piece_id} from {address}")
     
     def _send_piece(self, piece_id: int, address: str) -> None:
         """
@@ -440,3 +445,54 @@ class Node:
                 
             # Sleep for a bit
             time.sleep(5)
+
+    def transition_state(self, state_type: NodeStateType):
+        """
+        Transition to a new state
+
+        Args:
+            state_type(NodeStateType): the type of state to transition to
+        """
+        if state_type == NodeStateType.SEEDING:
+            self.state = SeederState()
+            self.state.set_node(self)
+            self.state.enter()
+
+        else:
+            if isinstance(self.state, LeecherState):
+                self.state.transition_to(state_type)
+            else:
+                self.state = LeecherState()
+                self.state.set_node(self)
+                self.state.transition_to(state_type)
+
+    def request_peers_from_tracker(self):
+        """Request peer list from tracker"""
+        if self.tracker_connection:
+            message = MessageFactory.get_peers_from_tracker()
+            self.tracker_connection.send(message)
+
+    def announce_completion_to_tracker(self):
+        if self.tracker_connection:
+            update_msg = MessageFactory.update_pieces(list(self.my_pieces))
+            self.tracker_connection.send(update_msg)
+
+    def announce_stopping_to_tracker(self):
+        if self.tracker_connection:
+            pass
+
+    def _request_piece_from_peer(self, piece_id: int, peer_adderss: str):
+        """
+        Request a specific piece from a specific peer
+
+        Args:
+            piece_id(int): id of the piece to request
+            peer_address(str): address of the peer to request from
+        """
+        if peer_adderss in self.peer_connections:
+            request_msg = MessageFactory.piece_request(piece_id)
+            self.peer_connections[peer_adderss].send(request_msg)
+
+            # Track the request
+            with self.lock:
+                self.pending_requests[piece_id] = time.time()
