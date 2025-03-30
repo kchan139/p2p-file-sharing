@@ -154,21 +154,21 @@ class TestNode(unittest.TestCase):
         self.assertEqual(self.node.peer_pieces["peer2"], {1, 2})
         self.assertEqual(self.node.peer_pieces["peer3"], {0, 1})
         
-    # @patch('threading.Thread')
-    # def test_check_request_timeouts(self, mock_thread):
-    #     """Test checking for request timeouts"""
-    #     # Setup
-    #     self.node.pending_requests = {1: time.time() - 70}  # 70 seconds old (timed out)
-    #     self.mock_piece_manager.check_timeouts.return_value = [2, 3]  # Pieces timed out in piece manager
+    @patch('threading.Thread')
+    def test_check_request_timeouts(self, mock_thread):
+        """Test checking for request timeouts"""
+        # Setup
+        self.node.pending_requests = {1: time.time() - 70}  # 70 seconds old (timed out)
+        self.mock_piece_manager.check_timeouts.return_value = [2, 3]  # Pieces timed out in piece manager
         
-    #     # Call the method directly instead of starting thread
-    #     with patch.object(self.node, 'running', True):
-    #         # Call once then set running to False to exit the loop
-    #         self.node._check_request_timeouts()
-    #         self.node.running = False
+        # Call the method directly instead of starting thread
+        with patch.object(self.node, 'running', True):
+            # Call once then set running to False to exit the loop
+            self.node._check_request_timeouts()
+            self.node.running = False
             
-    #     # Verify timed out pieces are requeued (1 from pending_requests, 2 and 3 from piece manager)
-    #     self.assertGreaterEqual(self.node.request_queue.qsize(), 3)
+        # Verify timed out pieces are requeued (1 from pending_requests, 2 and 3 from piece manager)
+        self.assertGreaterEqual(self.node.request_queue.qsize(), 3)
         
     @patch('src.network.connection.SocketWrapper')
     def test_send_piece(self, mock_socket_wrapper):
