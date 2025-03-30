@@ -348,7 +348,7 @@ class Node:
             
         # In a real implementation, we would read the piece from disk
         # For now, we use dummy data
-        data = b"dummy_piece_data_" + str(piece_id).encode()
+        data = self.piece_manager.get_piece_data(piece_id)
         
         # Create and send the piece response
         response = MessageFactory.piece_response(piece_id, data)
@@ -520,7 +520,8 @@ class Node:
 
     def announce_stopping_to_tracker(self):
         if self.tracker_connection:
-            pass
+            message = MessageFactory.stopped()
+            self.tracker_connection.send(message)
 
     def _request_piece_from_peer(self, piece_id: int, peer_adderss: str):
         """
