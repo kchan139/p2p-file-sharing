@@ -179,7 +179,10 @@ class Node:
                     
                     # Add to pending requests
                     with self.lock:
-                        self.pending_requests[piece_id] = time.time()
+                        self.pending_requests[piece_id] = {
+                            'peer': peer,
+                            'timestamp': time.time()
+                        }
                 else:
                     # No suitable peer found, requeue with lower priority
                     self.request_queue.put((priority + 10, piece_id))  # Delay retry
@@ -418,44 +421,40 @@ class Node:
             piece_id: ID of the received piece
             data: Raw piece data
         """
-        # Get peer address from pending requests
         peer_address = None
+        
         with self.lock:
-            # Remove from pending requests
-            if piece_id in self.pending_requests:
-                # Check the type of the stored value for proper handling
-                if isinstance(self.pending_requests[piece_id], dict):
-                    peer_address = self.pending_requests[piece_id].get('peer')
-                elif isinstance(self.pending_requests[piece_id], str):
-                    # If storing direct peer address
-                    peer_address = self.pending_requests[piece_id]
-                # Delete regardless of the type
-                del self.pending_requests[piece_id]
-        
-        # Update statistics if we know which peer sent this
+            # Retrieve and remove the pending request entry
+            request_entry = self.pending_requests.pop(piece_id, None)
+            if request_entry:
+                # Get the peer address from the request metadata
+                peer_address = request_entry.get('peer')
+
+        # Update statistics if we know the source peer
         if peer_address and hasattr(self, 'upload_manager'):
-            self.upload_manager.update_peer_stats(peer_address, bytes_downloaded=len(data))
-        
-        # Let the piece manager handle verification and storage
+            self.upload_manager.update_peer_stats(
+                peer_address, 
+                bytes_downloaded=len(data)
+            )
+
+        # Verify and store the piece
         success = self.piece_manager.receive_piece(piece_id, data)
         
         if success:
-            # Update our pieces set when verification is successful
             self.my_pieces.add(piece_id)
             
-            # Update tracker with new piece info
+            # Update tracker
             if self.tracker_connection:
                 update_msg = MessageFactory.update_pieces(list(self.my_pieces))
                 self.tracker_connection.send(update_msg)
             
-            # Update piece selection manager
-            if hasattr(self, 'piece_selection_manager') and self.piece_selection_manager:
+            # Update piece selection
+            if self.piece_selection_manager:
                 self.piece_selection_manager.update_piece_progress(piece_id, 1.0)
             
-            # Check if download is complete
+            # Check completion
             if self.piece_manager.is_complete():
                 print("Download complete!")
-                # Transition to seeder state
                 self.state = SeederState()
     
     def _handle_peer_message(self, message: Message, address: str) -> None:
@@ -488,13 +487,15 @@ class Node:
         if address not in self.peer_connections:
             return
             
-        # In a real implementation, we would read the piece from disk
-        # For now, we use dummy data
-        data = self.piece_manager.get_piece_data(piece_id)
-        
-        # Create and send the piece response
-        response = MessageFactory.piece_response(piece_id, data)
-        self.peer_connections[address].send(response)
+        try:
+            data = self.piece_manager.get_piece_data(piece_id)
+            if not isinstance(data, bytes):
+                raise ValueError(f"Invalid piece data type: {type(data)}")
+                
+            response = MessageFactory.piece_response(piece_id, data)
+            self.peer_connections[address].send(response)
+        except Exception as e:
+            print(f"Error sending piece {piece_id}: {e}")
     
     def download_pieces(self) -> None:
         """Queue pieces for download based on strategy"""
@@ -551,19 +552,14 @@ class Node:
             Optional[str]: Address of selected peer or None if no suitable peer
         """
         with self.lock:
-            suitable_peers = []
-            
-            for address, pieces in self.peer_pieces.items():
-                if (piece_id in pieces and 
-                    address in self.peer_connections and 
-                    address in self.unchoked_peers):
-                        suitable_peers.append(address)
-            
-            if suitable_peers:
-                # Could implement more sophisticated selection here
-                return random.choice(suitable_peers)
-        
-        return None
+            suitable_peers = [
+                address 
+                for address, pieces in self.peer_pieces.items()
+                if (piece_id in pieces and
+                    address in self.peer_connections and
+                    address in self.unchoked_peers)
+            ]
+            return random.choice(suitable_peers) if suitable_peers else None
 
     def transition_state(self, state_type: NodeStateType):
         """
@@ -601,7 +597,7 @@ class Node:
             message = MessageFactory.stopped()
             self.tracker_connection.send(message)
 
-    def _request_piece_from_peer(self, piece_id: int, peer_adderss: str):
+    def _request_piece_from_peer(self, piece_id: int, peer_address: str):
         """
         Request a specific piece from a specific peer
 
@@ -609,10 +605,13 @@ class Node:
             piece_id(int): id of the piece to request
             peer_address(str): address of the peer to request from
         """
-        if peer_adderss in self.peer_connections:
+        if peer_address in self.peer_connections:
             request_msg = MessageFactory.piece_request(piece_id)
-            self.peer_connections[peer_adderss].send(request_msg)
+            self.peer_connections[peer_address].send(request_msg)
 
             # Track the request
             with self.lock:
-                self.pending_requests[piece_id] = time.time()
+                self.pending_requests[piece_id] = {
+                    'peer': peer_address,
+                    'timestamp': time.time()
+                }
