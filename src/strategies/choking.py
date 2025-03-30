@@ -44,7 +44,7 @@ class OptimisticUnchokeStrategy(ChokingStrategy):
         )
 
         # Select top peers by download rate (tit-for-tat)
-        unchoked_peers = {peer for peer, _ in sorted_peers[:max_unchoked]}
+        unchoked_peers = {peer for peer, _ in sorted_peers[:max_unchoked-1]}
 
         if self.optimistic_unchoked:
             unchoked_peers.add(self.optimistic_unchoked)
