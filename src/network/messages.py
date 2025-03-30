@@ -11,7 +11,8 @@ class Message:
         "piece_response",
         "update_pieces",
         "get_peers",
-        "cancel_request"
+        "cancel_request",
+        "stopped"
     ]
 
     def __init__(self, msg_type: str, payload: Dict[str, Any]):
@@ -167,4 +168,9 @@ class MessageFactory:
             bytes: serialized message
         """
         message = Message("cancel_request", {"piece_id": piece_id})
+        return message.serialize()
+    
+    @staticmethod
+    def stopped() -> bytes:
+        message = Message("stopped", {})
         return message.serialize()
