@@ -29,25 +29,42 @@ class OptimisticUnchokeStrategy(ChokingStrategy):
             Set[str]: set of peer addresses to unchoke
         """
         current_time = time.time()
-
+        
+        # Update optimistic unchoke if needed
         if not self.optimistic_unchoked or current_time - self.last_rotation > self.rotation_interval:
             all_peers = list(peer_stats.keys())
             if all_peers:
                 self.optimistic_unchoked = random.choice(all_peers)
                 self.last_rotation = current_time
 
-        # Get all peers sorted by download rate
+        # Sort peers by download rate (descending)
         sorted_peers = sorted(
             peer_stats.items(),
             key=lambda x: x[1].get('download_rate', 0),
             reverse=True
         )
 
-        # Select top peers by download rate (tit-for-tat)
-        unchoked_peers = {peer for peer, _ in sorted_peers[:max_unchoked-1]}
-
-        if self.optimistic_unchoked:
+        unchoked_peers = set()
+        selected_peers = []
+        
+        # Always include optimistic unchoke if available
+        if self.optimistic_unchoked and self.optimistic_unchoked in peer_stats:
             unchoked_peers.add(self.optimistic_unchoked)
+            selected_peers.append(self.optimistic_unchoked)
+
+        # Select remaining peers from top performers
+        remaining_slots = max_unchoked - len(selected_peers)
+        for peer, _ in sorted_peers:
+            if peer not in unchoked_peers and remaining_slots > 0:
+                unchoked_peers.add(peer)
+                remaining_slots -= 1
+
+        # If still need more peers (edge case), take any unchoked peers
+        if remaining_slots > 0:
+            for peer in peer_stats.keys():
+                if peer not in unchoked_peers and remaining_slots > 0:
+                    unchoked_peers.add(peer)
+                    remaining_slots -= 1
 
         return unchoked_peers
     
