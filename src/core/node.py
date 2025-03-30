@@ -125,6 +125,142 @@ class Node:
         finally:
             if s:
                 s.close()
+    
+    def _accept_connections(self) -> None:
+        """Accept incoming connections from peers."""
+        while self.running:
+            try:
+                client_socket, address = self.server_socket.accept()
+                peer_address = f"{address[0]}:{address[1]}"
+                print(f"Accepted connection from {peer_address}")
+                
+                # Create a socket wrapper for this connection
+                socket_wrapper = SocketWrapper(None, None)
+                socket_wrapper.socket = client_socket
+                
+                # Setup callbacks and start the socket wrapper
+                socket_wrapper.register_callback(
+                    lambda message, addr=peer_address: self._handle_peer_message(message, addr)
+                )
+                socket_wrapper.start()
+                
+                # Add to peer connections
+                with self.lock:
+                    self.peer_connections[peer_address] = socket_wrapper
+                    
+            except Exception as e:
+                if self.running:
+                    print(f"Error accepting connection: {e}")
+                time.sleep(0.1)
+    
+    def _process_request_queue(self) -> None:
+        """Process the piece request queue"""
+        while self.running:
+            try:
+                # Check if we have room for more parallel requests
+                with self.lock:
+                    if len(self.pending_requests) >= self.max_parallel_requests:
+                        time.sleep(0.1)
+                        continue
+                
+                # Get the highest priority request
+                if self.request_queue.empty():
+                    time.sleep(0.1)
+                    continue
+                
+                priority, piece_id = self.request_queue.get()
+                
+                # Find suitable peer
+                peer = self._select_peer_for_piece(piece_id)
+                if peer:
+                    # Send request
+                    request = MessageFactory.request_piece(piece_id)
+                    self.peer_connections[peer].send(request)
+                    
+                    # Add to pending requests
+                    with self.lock:
+                        self.pending_requests[piece_id] = time.time()
+                else:
+                    # No suitable peer found, requeue with lower priority
+                    self.request_queue.put((priority + 10, piece_id))  # Delay retry
+                
+                # Small delay to avoid flooding
+                time.sleep(0.05)
+                
+            except Exception as e:
+                print(f"Error processing request queue: {e}")
+                time.sleep(1)
+
+    def _manage_choking(self) -> None:
+        """
+        Periodically update which peers are choked/unchoked based on current strategy.
+        """
+        choking_interval = 10  # seconds between choking decisions
+        
+        while self.running:
+            try:
+                with self.lock:
+                    if not hasattr(self, 'upload_slot_manager'):
+                        # Initialize slot manager if not done already
+                        from src.strategies.choking import UploadSlotManager
+                        self.upload_slot_manager = UploadSlotManager(max_unchoked=4)
+                    
+                    # Get list of peers that should be unchoked according to strategy
+                    peers_to_unchoke = self.upload_slot_manager.get_unchoked_peers()
+                    
+                    # Find peers needing state changes
+                    to_choke = self.unchoked_peers - peers_to_unchoke
+                    to_unchoke = peers_to_unchoke - self.unchoked_peers
+                    
+                    # Apply changes
+                    for peer in to_choke:
+                        if peer in self.peer_connections:
+                            from src.network.messages import MessageFactory
+                            choke_msg = MessageFactory.choke()
+                            self.peer_connections[peer].send(choke_msg)
+                            self.unchoked_peers.remove(peer)
+                            self.choked_peers.add(peer)
+                            print(f"Choking peer {peer}")
+                    
+                    for peer in to_unchoke:
+                        if peer in self.peer_connections:
+                            from src.network.messages import MessageFactory
+                            unchoke_msg = MessageFactory.unchoke()
+                            self.peer_connections[peer].send(unchoke_msg)
+                            self.choked_peers.remove(peer)
+                            self.unchoked_peers.add(peer)
+                            print(f"Unchoking peer {peer}")
+                
+                time.sleep(choking_interval)
+            except Exception as e:
+                print(f"Error in choking management: {e}")
+                time.sleep(choking_interval)
+    
+    def _check_request_timeouts(self) -> None:
+        """Check for piece request timeouts and requeue them."""
+        while self.running:
+            if not self.piece_manager:
+                time.sleep(1)
+                continue
+                
+            # Check for timed out pieces in piece manager
+            timed_out = self.piece_manager.check_timeouts(self.request_timeout)
+            
+            # Also check our own pending requests
+            current_time = time.time()
+            with self.lock:
+                for piece_id, timestamp in list(self.pending_requests.items()):
+                    if current_time - timestamp > self.request_timeout:
+                        del self.pending_requests[piece_id]
+                        timed_out.append(piece_id)
+            
+            # Requeue timed out pieces
+            for piece_id in timed_out:
+                # Use higher priority for timed out pieces
+                self.request_queue.put((current_time - 100, piece_id))
+                
+            # Sleep for a bit
+            time.sleep(5)
 
     def connect_to_tracker(self, tracker_host: str, tracker_port: int, retry_attempts=3) -> bool:
         """
@@ -287,7 +423,13 @@ class Node:
         with self.lock:
             # Remove from pending requests
             if piece_id in self.pending_requests:
-                peer_address = self.pending_requests[piece_id].get('peer')
+                # Check the type of the stored value for proper handling
+                if isinstance(self.pending_requests[piece_id], dict):
+                    peer_address = self.pending_requests[piece_id].get('peer')
+                elif isinstance(self.pending_requests[piece_id], str):
+                    # If storing direct peer address
+                    peer_address = self.pending_requests[piece_id]
+                # Delete regardless of the type
                 del self.pending_requests[piece_id]
         
         # Update statistics if we know which peer sent this
@@ -398,44 +540,6 @@ class Node:
         self.request_queue.put((priority, piece_id))
         return True
     
-    def _process_request_queue(self) -> None:
-        """Process the piece request queue"""
-        while self.running:
-            try:
-                # Check if we have room for more parallel requests
-                with self.lock:
-                    if len(self.pending_requests) >= self.max_parallel_requests:
-                        time.sleep(0.1)
-                        continue
-                
-                # Get the highest priority request
-                if self.request_queue.empty():
-                    time.sleep(0.1)
-                    continue
-                
-                priority, piece_id = self.request_queue.get()
-                
-                # Find suitable peer
-                peer = self._select_peer_for_piece(piece_id)
-                if peer:
-                    # Send request
-                    request = MessageFactory.request_piece(piece_id)
-                    self.peer_connections[peer].send(request)
-                    
-                    # Add to pending requests
-                    with self.lock:
-                        self.pending_requests[piece_id] = time.time()
-                else:
-                    # No suitable peer found, requeue with lower priority
-                    self.request_queue.put((priority + 10, piece_id))  # Delay retry
-                
-                # Small delay to avoid flooding
-                time.sleep(0.05)
-                
-            except Exception as e:
-                print(f"Error processing request queue: {e}")
-                time.sleep(1)
-    
     def _select_peer_for_piece(self, piece_id: int) -> Optional[str]:
         """
         Select a peer that has the piece we want.
@@ -460,32 +564,6 @@ class Node:
                 return random.choice(suitable_peers)
         
         return None
-    
-    def _check_request_timeouts(self) -> None:
-        """Check for piece request timeouts and requeue them."""
-        while self.running:
-            if not self.piece_manager:
-                time.sleep(1)
-                continue
-                
-            # Check for timed out pieces in piece manager
-            timed_out = self.piece_manager.check_timeouts(self.request_timeout)
-            
-            # Also check our own pending requests
-            current_time = time.time()
-            with self.lock:
-                for piece_id, timestamp in list(self.pending_requests.items()):
-                    if current_time - timestamp > self.request_timeout:
-                        del self.pending_requests[piece_id]
-                        timed_out.append(piece_id)
-            
-            # Requeue timed out pieces
-            for piece_id in timed_out:
-                # Use higher priority for timed out pieces
-                self.request_queue.put((current_time - 100, piece_id))
-                
-            # Sleep for a bit
-            time.sleep(5)
 
     def transition_state(self, state_type: NodeStateType):
         """
