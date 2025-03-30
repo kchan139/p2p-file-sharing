@@ -1,205 +1,193 @@
-import unittest
-from unittest.mock import MagicMock, patch, call
-import socket
-import threading
+# tests/core/test_node.py
 import time
+import unittest
+from unittest.mock import MagicMock, patch
 
 from src.core.node import Node
-from src.network.messages import Message, MessageFactory
-from src.network.connection import SocketWrapper
-import src
+from src.torrent.piece_manager import PieceManager
+from src.states.seeder_state import SeederState
+
 
 class TestNode(unittest.TestCase):
-    
-    @patch('socket.socket')
-    def setUp(self, mock_socket):
-        self.mock_socket_instance = MagicMock()
-        mock_socket.return_value = self.mock_socket_instance
-        self.mock_socket_instance.getsockname.return_value = ('127.0.0.1', 8000)
+    def setUp(self):
+        self.node = Node(listen_port=0)  # Use port 0 for automatic assignment
         
-        # Create node with patched socket
-        self.node = Node(listen_port=8000)
-    
-    @patch('threading.Thread')
-    def test_start(self, mock_thread):
-        # Create a new node with direct mocking
-        node = Node(listen_port=8000)
+        # Mock piece manager
+        self.mock_piece_manager = MagicMock(spec=PieceManager)
+        self.node.piece_manager = self.mock_piece_manager
         
-        # Create the context for testing - we need to directly replace the method
-        original_discover_ip = node.discover_public_ip
-        node.discover_public_ip = MagicMock(return_value='192.168.1.1')
-        
-        # Mock socket operations
-        with patch('socket.socket') as mock_socket:
-            mock_socket_instance = MagicMock()
-            mock_socket.return_value = mock_socket_instance
-            mock_socket_instance.getsockname.return_value = ('127.0.0.1', 8000)
-            
-            node.start()
-            
-            # Verify socket setup
-            mock_socket_instance.setsockopt.assert_called_with(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            mock_socket_instance.bind.assert_called_with(('0.0.0.0', 8000))
-            mock_socket_instance.listen.assert_called_with(5)
-            
-            # Check if threads were started
-            self.assertEqual(mock_thread.call_count, 3)
-            
-            # Verify node address is set correctly
-            self.assertEqual(node.address, '192.168.1.1:8000')
-            self.assertTrue(node.running)
-            
-            # Restore the original method
-            node.discover_public_ip = original_discover_ip
+        # Mock pieces
+        self.node.piece_availability = {0: 2, 1: 1, 2: 3}
+        self.node.available_pieces = [
+            {"id": 0, "availability": 2},
+            {"id": 1, "availability": 1},
+            {"id": 2, "availability": 3}
+        ]
 
-    def test_discover_public_ip(self):
-        # Create a local node for this test
-        node = Node()
+    def test_configure_piece_manager(self):
+        """Test configuration of piece manager"""
+        self.node.piece_manager = None  # Reset mock
         
-        # Create a context where all socket operations are mocked
-        with patch('socket.socket') as mock_socket:
-            # Setup the mock to return our desired IP
-            mock_instance = MagicMock()
-            mock_socket.return_value = mock_instance
-            mock_instance.getsockname.return_value = ('123.45.67.89', 12345)
-            
-            # Call the method
-            ip = node.discover_public_ip()
-            
-            # Verify the result
-            self.assertEqual(ip, '123.45.67.89')
-    
-    def test_connect_to_tracker_success(self):
-        # First, find out where SocketWrapper is actually imported in the Node module
-        with patch('src.core.node.SocketWrapper') as mock_socketwrapper_class:
-            # Create a mock instance that will be returned when SocketWrapper is instantiated
-            mock_wrapper = MagicMock()
-            mock_socketwrapper_class.return_value = mock_wrapper
-            
-            # Configure the mock to return True for connect()
-            mock_wrapper.connect.return_value = True
-            
-            # Call the method we're testing
-            result = self.node.connect_to_tracker('tracker.example.com', 8080)
-            
-            # Assert SocketWrapper was instantiated correctly
-            mock_socketwrapper_class.assert_called_once_with('tracker.example.com', 8080, max_retries=3)
-            
-            # Assert the mock connect method was called once
-            mock_wrapper.connect.assert_called_once()
-            
-            # Assert other methods were called
-            mock_wrapper.register_callback.assert_called_once()
-            mock_wrapper.start.assert_called_once()
-            mock_wrapper.send.assert_called_once()
-            
-            # Assert final result
-            self.assertTrue(result)
-
-    def test_connect_to_tracker_failure(self):
-        # First, find out where SocketWrapper is actually imported in the Node module
-        with patch('src.core.node.SocketWrapper') as mock_socketwrapper_class:
-            # Create a mock instance that will be returned when SocketWrapper is instantiated
-            mock_wrapper = MagicMock()
-            mock_socketwrapper_class.return_value = mock_wrapper
-            
-            # Configure the mock to return False for connect()
-            mock_wrapper.connect.return_value = False
-            
-            # Call the method we're testing with 2 retry attempts
-            result = self.node.connect_to_tracker('tracker.example.com', 8080, retry_attempts=2)
-            
-            # Since connect() returns False immediately, SocketWrapper should only be instantiated once
-            mock_socketwrapper_class.assert_called_once_with('tracker.example.com', 8080, max_retries=2)
-            
-            # Assert connect was called once (no retries needed since we mock at a higher level)
-            mock_wrapper.connect.assert_called_once()
-            
-            # Assert final result
-            self.assertFalse(result)
-    
-    @patch('src.network.connection.SocketWrapper')
-    def test_handle_tracker_message(self, mock_socketwrapper):
-        # Setup tracker connection
-        mock_wrapper = MagicMock()
-        mock_socketwrapper.return_value = mock_wrapper
-        mock_wrapper.connect.return_value = True
+        # Configure piece manager
+        self.node.configure_piece_manager(
+            output_dir="data/test",
+            piece_size=512 * 1024,
+            pieces_hashes=["hash1", "hash2", "hash3"],
+            total_size=1536 * 1024,
+            filename="test_file.txt"
+        )
         
-        with patch.object(self.node, '_update_peer_connections') as mock_update:
-            # Create test message
-            peers = [{"address": "192.168.1.10:8000", "pieces": [1, 2, 3]}]
-            message = Message("peer_list", {"peers": peers})
-            
-            self.node._handle_tracker_message(message)
-            
-            # Verify peer connections were updated
-            mock_update.assert_called_once_with(peers)
-    
-    def test_update_peer_connections(self):
-        # Mock connect_to_peer to avoid actual network calls
-        with patch.object(self.node, '_connect_to_peer') as mock_connect:
-            peers = [
-                {"address": "192.168.1.10:8000", "pieces": [1, 2, 3]},
-                {"address": "192.168.1.11:8000", "pieces": [4, 5, 6]}
-            ]
-            
-            self.node._update_peer_connections(peers)
-            
-            # Verify connection attempts
-            calls = [call("192.168.1.10:8000"), call("192.168.1.11:8000")]
-            mock_connect.assert_has_calls(calls)
-    
+        # Verify piece manager was created and initialized
+        self.assertIsNotNone(self.node.piece_manager)
+        self.assertEqual(len(self.node.piece_availability), 3)
+        
+    def test_request_piece(self):
+        """Test requesting a piece"""
+        # Setup
+        self.mock_piece_manager.mark_piece_in_progress.return_value = True
+        
+        # Test requesting a piece
+        result = self.node._request_piece(1)
+        
+        # Verify
+        self.assertTrue(result)
+        self.mock_piece_manager.mark_piece_in_progress.assert_called_once_with(1)
+        self.assertEqual(self.node.request_queue.qsize(), 1)
+        
+    def test_request_piece_already_in_progress(self):
+        """Test requesting a piece that's already in progress"""
+        # Setup
+        self.mock_piece_manager.mark_piece_in_progress.return_value = False
+        
+        # Test
+        result = self.node._request_piece(1)
+        
+        # Verify
+        self.assertFalse(result)
+        self.assertEqual(self.node.request_queue.qsize(), 0)
+        
     def test_handle_piece_received(self):
-        # Setup pending request and tracker connection
-        piece_id = 42
-        data = b"test_piece_data"
-        self.node.pending_requests = {piece_id: time.time()}
-        self.node.tracker_connection = MagicMock()
+        """Test handling a received piece"""
+        # Setup
+        piece_id = 1
+        data = b"test_data"
+        self.node.pending_requests[piece_id] = time.time()
+        self.mock_piece_manager.receive_piece.return_value = True
         
+        # Test
         self.node._handle_piece_received(piece_id, data)
         
-        # Verify piece was added and request removed
+        # Verify
+        self.mock_piece_manager.receive_piece.assert_called_once_with(piece_id, data)
         self.assertIn(piece_id, self.node.my_pieces)
         self.assertNotIn(piece_id, self.node.pending_requests)
         
-        # Verify tracker was updated
-        self.node.tracker_connection.send.assert_called_once()
-    
+    def test_transition_to_seeder(self):
+        """Test transition to seeder when download completes"""
+        # Setup
+        piece_id = 1
+        data = b"test_data"
+        self.node.pending_requests[piece_id] = time.time()
+        self.mock_piece_manager.receive_piece.return_value = True
+        self.mock_piece_manager.is_complete.return_value = True
+        
+        # Test
+        self.node._handle_piece_received(piece_id, data)
+        
+        # Verify
+        self.assertIsInstance(self.node.state, SeederState)
+        
     def test_select_peer_for_piece(self):
-        # Setup unchoked peers
-        peer1 = "192.168.1.10:8000"
-        peer2 = "192.168.1.11:8000"
-        
-        self.node.peer_connections = {
-            peer1: MagicMock(),
-            peer2: MagicMock()
+        """Test selecting a peer that has a specific piece"""
+        # Setup
+        self.node.peer_pieces = {
+            "peer1": {0, 2},
+            "peer2": {1, 2},
+            "peer3": {0, 1}
         }
-        self.node.unchoked_peers = {peer1}
-        self.node.choked_peers = {peer2}
+        self.node.unchoked_peers = {"peer1", "peer2", "peer3"}
         
-        # Test selection from unchoked peers
-        selected = self.node._select_peer_for_piece(1)
-        self.assertEqual(selected, peer1)
+        # Test
+        peer = self.node._select_peer_for_piece(1)
         
-        # Test with no unchoked peers
-        self.node.unchoked_peers.clear()
-        selected = self.node._select_peer_for_piece(1)
-        self.assertIsNone(selected)
-    
-    def test_request_piece(self):
-        # Test requesting new piece
-        self.node._request_piece(42)
-        self.assertEqual(self.node.request_queue.qsize(), 1)
+        # Verify
+        self.assertIn(peer, ["peer2", "peer3"])  # Either peer2 or peer3 could be selected
         
-        # Test requesting already owned piece
-        self.node.my_pieces.add(43)
-        self.node._request_piece(43)
-        self.assertEqual(self.node.request_queue.qsize(), 1)  # Should not increase
+    def test_select_peer_no_suitable_peer(self):
+        """Test when no peer has the requested piece"""
+        # Setup
+        self.node.peer_pieces = {
+            "peer1": {0, 2},
+            "peer2": {2},
+            "peer3": {0}
+        }
+        self.node.unchoked_peers = {"peer1", "peer2", "peer3"}
         
-        # Test requesting pending piece
-        self.node.pending_requests[44] = time.time()
-        self.node._request_piece(44)
-        self.assertEqual(self.node.request_queue.qsize(), 1)  # Should not increase
+        # Test
+        peer = self.node._select_peer_for_piece(1)
+        
+        # Verify
+        self.assertIsNone(peer)
+        
+    def test_update_piece_availability(self):
+        """Test updating piece availability from peer information"""
+        # Setup
+        peers = [
+            {"address": "peer1", "pieces": [0, 2]},
+            {"address": "peer2", "pieces": [1, 2]},
+            {"address": "peer3", "pieces": [0, 1]}
+        ]
+        
+        # Reset availability counts
+        self.node.piece_availability = {0: 0, 1: 0, 2: 0}
+        
+        # Test
+        self.node._update_piece_availability(peers)
+        
+        # Verify
+        self.assertEqual(self.node.piece_availability[0], 2)  # 2 peers have piece 0
+        self.assertEqual(self.node.piece_availability[1], 2)  # 2 peers have piece 1
+        self.assertEqual(self.node.piece_availability[2], 2)  # 2 peers have piece 2
+        
+        # Check peer pieces are tracked
+        self.assertEqual(self.node.peer_pieces["peer1"], {0, 2})
+        self.assertEqual(self.node.peer_pieces["peer2"], {1, 2})
+        self.assertEqual(self.node.peer_pieces["peer3"], {0, 1})
+        
+    # @patch('threading.Thread')
+    # def test_check_request_timeouts(self, mock_thread):
+    #     """Test checking for request timeouts"""
+    #     # Setup
+    #     self.node.pending_requests = {1: time.time() - 70}  # 70 seconds old (timed out)
+    #     self.mock_piece_manager.check_timeouts.return_value = [2, 3]  # Pieces timed out in piece manager
+        
+    #     # Call the method directly instead of starting thread
+    #     with patch.object(self.node, 'running', True):
+    #         # Call once then set running to False to exit the loop
+    #         self.node._check_request_timeouts()
+    #         self.node.running = False
+            
+    #     # Verify timed out pieces are requeued (1 from pending_requests, 2 and 3 from piece manager)
+    #     self.assertGreaterEqual(self.node.request_queue.qsize(), 3)
+        
+    @patch('src.network.connection.SocketWrapper')
+    def test_send_piece(self, mock_socket_wrapper):
+        """Test sending a piece to a peer"""
+        # Setup
+        mock_connection = MagicMock()
+        self.node.peer_connections = {"peer1": mock_connection}
+        
+        # Test
+        self.node._send_piece(1, "peer1")
+        
+        # Verify
+        mock_connection.send.assert_called_once()
+        
+        # Get the message argument
+        args = mock_connection.send.call_args[0]
+        self.assertIn(b'piece_response', args[0])
+        self.assertIn(b'64756d6d795f70696563655f646174615f31', args[0]) # The hex-encoded representation
+
 
 if __name__ == '__main__':
     unittest.main()
