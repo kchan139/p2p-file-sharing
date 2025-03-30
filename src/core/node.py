@@ -6,12 +6,13 @@ import socket
 import threading
 from typing import List, Dict, Optional, Set
 
-from src.strategies.piece_selection import RarestFirstStrategy
+from src.network.messages import Message, MessageFactory
+from src.network.connection import SocketWrapper
 from src.states.node_state import NodeStateType
 from src.states.leecher_state import LeecherState
 from src.states.seeder_state import SeederState
-from src.network.messages import Message, MessageFactory
-from src.network.connection import SocketWrapper
+from src.strategies.choking import UploadSlotManager
+from src.strategies.piece_selection import PieceSelectionManager
 from src.torrent.piece_manager import PieceManager
 
 class Node:
@@ -19,7 +20,6 @@ class Node:
         self.available_pieces = []
         self.my_pieces = set()
         self.state = LeecherState()
-        self.strategy = RarestFirstStrategy()
 
         # Networking components
         self.listen_host = listen_host
@@ -50,26 +50,11 @@ class Node:
 
         # Server socket for incoming connections
         self.server_socket = None
-    
-    def configure_piece_manager(self, output_dir: str, piece_size: int, 
-                               pieces_hashes: List[str], total_size: int,
-                               filename: str) -> None:
-        """
-        Configure the piece manager for file handling.
-        
-        Args:
-            output_dir (str): Directory to save the file
-            piece_size (int): Size of each piece in bytes
-            pieces_hashes (List[str]): List of SHA1 hashes for each piece
-            total_size (int): Total file size in bytes
-            filename (str): Name of the output file
-        """
-        self.piece_manager = PieceManager(output_dir, piece_size, pieces_hashes, total_size)
-        self.piece_manager.init_storage(filename)
-        
-        # Initialize piece availability
-        for i in range(len(pieces_hashes)):
-            self.piece_availability[i] = 0
+
+        # Strategy system components
+        self.upload_manager = UploadSlotManager()
+        self.piece_selection_manager = None
+        self.max_pipeline_depth = 5
 
     def start(self) -> None:
         """Start the node's networking components."""
@@ -245,6 +230,49 @@ class Node:
             if peer_address and peer_address != self.address:
                 if peer_address not in self.peer_connections:
                     self._connect_to_peer(peer_address)
+
+    def set_up_strategy_system(self, piece_count: int):
+        self.piece_selection_manager = PieceSelectionManager(
+            piece_count=piece_count, max_pipeline_depth=self.max_pipeline_depth
+        )
+    
+    def configure_piece_manager(self, output_dir: str, piece_size: int, 
+                               pieces_hashes: List[str], total_size: int,
+                               filename: str) -> None:
+        """
+        Configure the piece manager for file handling.
+        
+        Args:
+            output_dir (str): Directory to save the file
+            piece_size (int): Size of each piece in bytes
+            pieces_hashes (List[str]): List of SHA1 hashes for each piece
+            total_size (int): Total file size in bytes
+            filename (str): Name of the output file
+        """
+        self.piece_manager = PieceManager(output_dir, piece_size, pieces_hashes, total_size)
+        self.piece_manager.init_storage(filename)
+        
+        # Initialize piece availability
+        for i in range(len(pieces_hashes)):
+            self.piece_availability[i] = 0
+
+    def update_choking(self):
+        """Update choking decisions based on strategy"""
+        peers_to_unchoke = self.upload_manager.get_unchoked_peers()
+        
+        new_unchoked = peers_to_unchoke - self.unchoked_peers
+        new_choked = self.unchoked_peers - peers_to_unchoke
+        
+        for peer in new_unchoked:
+            if peer in self.peer_connections:
+                self.peer_connections[peer].send(MessageFactory.unchoke())
+        
+        for peer in new_choked:
+            if peer in self.peer_connections:
+                self.peer_connections[peer].send(MessageFactory.choke())
+        
+        self.unchoked_peers = peers_to_unchoke
+        self.choked_peers = set(self.peer_connections.keys()) - peers_to_unchoke    
     
     def _handle_piece_received(self, piece_id: int, data: bytes) -> None:
         """
@@ -254,10 +282,17 @@ class Node:
             piece_id: ID of the received piece
             data: Raw piece data
         """
+        # Get peer address from pending requests
+        peer_address = None
         with self.lock:
             # Remove from pending requests
             if piece_id in self.pending_requests:
+                peer_address = self.pending_requests[piece_id].get('peer')
                 del self.pending_requests[piece_id]
+        
+        # Update statistics if we know which peer sent this
+        if peer_address and hasattr(self, 'upload_manager'):
+            self.upload_manager.update_peer_stats(peer_address, bytes_downloaded=len(data))
         
         # Let the piece manager handle verification and storage
         success = self.piece_manager.receive_piece(piece_id, data)
@@ -270,6 +305,10 @@ class Node:
             if self.tracker_connection:
                 update_msg = MessageFactory.update_pieces(list(self.my_pieces))
                 self.tracker_connection.send(update_msg)
+            
+            # Update piece selection manager
+            if hasattr(self, 'piece_selection_manager') and self.piece_selection_manager:
+                self.piece_selection_manager.update_piece_progress(piece_id, 1.0)
             
             # Check if download is complete
             if self.piece_manager.is_complete():
@@ -322,16 +361,17 @@ class Node:
         
         # Get list of needed pieces from piece manager
         needed_pieces = self.piece_manager.get_needed_pieces()
-        
-        # Filter available pieces to only those we need
-        available_needed = [p for p in self.available_pieces if p["id"] in needed_pieces]
-        
-        if not available_needed:
+        if not needed_pieces:
             return
-            
-        # Use strategy to select next piece
-        selected = self.strategy.select(available_needed)
-        self._request_piece(selected["id"])
+        
+        pieces_to_request = self.piece_selection_manager.select_next_pieces(
+            needed_pieces=needed_pieces, peer_pieces=self.peer_pieces
+        )
+
+        for piece_id in pieces_to_request:
+            peer = self._select_peer_for_piece(piece_id)
+            if peer:
+                self._request_piece_from_peer(piece_id, peer)
     
     def _request_piece(self, piece_id: int) -> bool:
         """
@@ -409,10 +449,11 @@ class Node:
         with self.lock:
             suitable_peers = []
             
-            for peer_address in self.unchoked_peers:
-                if peer_address in self.peer_pieces:
-                    if piece_id in self.peer_pieces[peer_address]:
-                        suitable_peers.append(peer_address)
+            for address, pieces in self.peer_pieces.items():
+                if (piece_id in pieces and 
+                    address in self.peer_connections and 
+                    address in self.unchoked_peers):
+                        suitable_peers.append(address)
             
             if suitable_peers:
                 # Could implement more sophisticated selection here
