@@ -79,14 +79,14 @@ class StrategyPerformanceTester(unittest.TestCase):
             rarest = RarestFirstStrategy()
             start_time = time.time()
             for _ in range(5):  # Run multiple iterations
-                rarest.select_next_pieces(needed_pieces, peer_pieces, in_progress, 10)
+                rarest.select_next_piece(needed_pieces, peer_pieces, in_progress, 10)
             rarest_time = time.time() - start_time
             
             # Test RandomFirstPiecesStrategy
             random_strat = RandomFirstPiecesStrategy()
             start_time = time.time()
             for _ in range(5):  # Run multiple iterations
-                random_strat.select_next_pieces(needed_pieces, peer_pieces, in_progress, 10)
+                random_strat.select_next_piece(needed_pieces, peer_pieces, in_progress, 10)
             random_time = time.time() - start_time
             
             print(f"\nPiece selection performance ({peer_count} peers, {piece_count} pieces):")
@@ -113,13 +113,13 @@ class StrategyPerformanceTester(unittest.TestCase):
             # Measure RarestFirst
             rarest = RarestFirstStrategy()
             start = time.time()
-            rarest.select_next_pieces(needed_pieces, peer_pieces, in_progress, 10)
+            rarest.select_next_piece(needed_pieces, peer_pieces, in_progress, 10)
             rarest_times.append(time.time() - start)
             
             # Measure RandomFirst
             random_strat = RandomFirstPiecesStrategy()
             start = time.time()
-            random_strat.select_next_pieces(needed_pieces, peer_pieces, in_progress, 10)
+            random_strat.select_next_piece(needed_pieces, peer_pieces, in_progress, 10)
             random_times.append(time.time() - start)
         
         print("\nScalability test results:")

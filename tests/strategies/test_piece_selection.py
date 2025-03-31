@@ -18,11 +18,11 @@ class TestRarestFirstStrategy(unittest.TestCase):
         }
         self.in_progress = {}
         
-    def test_select_next_pieces(self):
+    def test_select_next_piece(self):
         # Pieces 1 and 5 appear in 2 peers each
         # Pieces 2, 3, and 4 appear in 3 peers each
         # So 1 and 5 should be selected first
-        pieces = self.strategy.select_next_pieces(
+        pieces = self.strategy.select_next_piece(
             self.needed_pieces, self.peer_pieces, self.in_progress, 2
         )
         
@@ -35,7 +35,7 @@ class TestRarestFirstStrategy(unittest.TestCase):
         # Mark piece 1 as in progress
         self.in_progress = {5: 0.5}
         
-        pieces = self.strategy.select_next_pieces(
+        pieces = self.strategy.select_next_piece(
             self.needed_pieces, self.peer_pieces, self.in_progress, 2
         )
         
@@ -59,11 +59,11 @@ class TestRandomFirstPiecesStrategy(unittest.TestCase):
         self.in_progress = {}
         
     @patch('random.sample')
-    def test_select_next_pieces(self, mock_sample):
+    def test_select_next_piece(self, mock_sample):
         # Mock random.sample to return predictable results
         mock_sample.return_value = [3, 5, 7]
         
-        pieces = self.strategy.select_next_pieces(
+        pieces = self.strategy.select_next_piece(
             self.needed_pieces, self.peer_pieces, self.in_progress, 3
         )
         
@@ -108,13 +108,13 @@ class TestPieceSelectionManager(unittest.TestCase):
         # Should have switched to rarest first
         self.assertEqual(self.manager.active_strategy, self.manager.rarest_strategy)
         
-    def test_select_next_pieces(self):
+    def test_select_next_piece(self):
         # Test delegation to active strategy
         needed_pieces = [1, 2, 3]
         peer_pieces = {'peer1': {1, 2}}
         
-        self.manager.select_next_pieces(needed_pieces, peer_pieces)
-        self.manager.active_strategy.select_next_pieces.assert_called_once()
+        self.manager.select_next_piece(needed_pieces, peer_pieces)
+        self.manager.active_strategy.select_next_piece.assert_called_once()
         
     def test_cancel_request(self):
         # Add a piece in progress
