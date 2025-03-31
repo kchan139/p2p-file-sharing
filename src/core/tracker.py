@@ -116,19 +116,24 @@ class Tracker(Subject):
 
     def _process_message(self, message: Message, client_socket: socket.socket, address: tuple[str, int]) -> None:
         """Process received message."""
-        peer_address = self._format_address(address)
-        
         if message.msg_type == "peer_joined":
-            # Use provided address if available, otherwise use the connection address
-            address_from_msg = message.payload.get("address")
-            registered_address = address_from_msg if address_from_msg else peer_address
+            registered_address = message.payload.get("address", address)
+            # Store the connection-to-registered address mapping
+            self.connection_address_map = getattr(self, 'connection_address_map', {})
+            self.connection_address_map[self._format_address(address)] = registered_address
+            
             peers = self.register_peer(registered_address)
             response = MessageFactory.peer_list(peers)
             client_socket.sendall(response)
 
         elif message.msg_type == "update_pieces":
+            # Use the registered address instead of connection address
+            self.connection_address_map = getattr(self, 'connection_address_map', {})
+            registered_address = self.connection_address_map.get(
+                self._format_address(address), address)
+                
             pieces = message.payload.get("pieces", [])
-            self.update_peer_pieces(peer_address, pieces)
+            self.update_peer_pieces(registered_address, pieces)
 
         elif message.msg_type == "get_peers":
             peers = self.get_all_peers()
