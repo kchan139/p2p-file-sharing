@@ -499,6 +499,8 @@ class Node:
                 
             response = MessageFactory.piece_response(piece_id, data)
             self.peer_connections[address].send(response)
+            # Track upload stats
+            self.upload_manager.update_peer_stats(address, bytes_uploaded=len(data))
         except IOError as e:
             logging.error(f"I/O error sending piece {piece_id}: {e}")
         except socket.error as e:
@@ -508,22 +510,57 @@ class Node:
     
     def _handle_peer_message(self, message: Message, address: str) -> None:
         """Handle message from peers."""
+        logging.debug(f"Processing {message.msg_type} from {address}")
+        
         if message.msg_type == "piece_request":
             piece_id = message.payload.get("piece_id")
+            logging.debug(f"Received request for piece {piece_id} from {address}")
+            
             if piece_id in self.my_pieces and address in self.unchoked_peers:
+                logging.info(f"Sending piece {piece_id} to {address}")
                 self._send_piece(piece_id, address)
+            else:
+                reason = "piece not available" if piece_id not in self.my_pieces else "peer is choked"
+                logging.debug(f"Rejected piece request {piece_id} from {address}: {reason}")
 
         elif message.msg_type == "piece_response":
             piece_id = message.payload.get("piece_id")
             data_hex = message.payload.get("data")
-
+            
+            logging.debug(f"Received piece {piece_id} data from {address}")
+            
             if piece_id and data_hex and piece_id in self.pending_requests:
-                data = bytes.fromhex(data_hex)
-                self._handle_piece_received(piece_id, data)
+                try:
+                    data = bytes.fromhex(data_hex)
+                    self._handle_piece_received(piece_id, data)
+                    logging.info(f"Successfully processed piece {piece_id} from {address}")
+                except ValueError as e:
+                    logging.error(f"Invalid piece data from {address}: {e}")
+            else:
+                logging.debug(f"Ignored piece {piece_id}: not requested or missing data")
 
         elif message.msg_type == "cancel_request":
             piece_id = message.payload.get("piece_id")
             logging.info(f"Received cancel request for piece {piece_id} from {address}")
+
+        elif message.msg_type == "interested":
+            # Mark peer as interested in our pieces
+            if address in self.peer_connections:
+                self.peer_connections[address].peer_interested = True
+                logging.debug(f"Peer {address} is now interested")
+                
+                # Request immediate choke decision update
+                if hasattr(self, 'upload_manager'):
+                    self.upload_manager.update_choked_peers()
+                    
+        elif message.msg_type == "not_interested":
+            # Mark peer as not interested in our pieces
+            if address in self.peer_connections:
+                self.peer_connections[address].peer_interested = False
+                logging.debug(f"Peer {address} is no longer interested")
+            
+        else:
+            logging.debug(f"Unhandled message type '{message.msg_type}' from {address}")
     
     def download_pieces(self) -> None:
         """Queue pieces for download based on strategy"""
