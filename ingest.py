@@ -28,6 +28,7 @@ def write_file_contents(output_file):
         # "./src/utils/serialization.py",
 
         "./src/config.py",
+        "main.py",
 
         # "tests/core/test_node.py",
         # "tests/core/test_tracker.py",
@@ -52,7 +53,7 @@ def write_file_contents(output_file):
         # "./reference/code/tracker.py",
         # "./reference/code/deal_torrent.py",
         # "./reference/code/metainfo.torrent",
-        "./reference/docs/Specification.md",
+        # "./reference/docs/Specification.md",
     ]
 
     with open(output_file, "w", encoding="utf-8") as f:
