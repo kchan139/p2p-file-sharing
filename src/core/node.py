@@ -3,8 +3,9 @@ import time
 import queue
 import random
 import socket
+import logging
 import threading
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional
 
 from src.network.messages import Message, MessageFactory
 from src.network.connection import SocketWrapper
@@ -15,8 +16,10 @@ from src.strategies.choking import UploadSlotManager
 from src.strategies.piece_selection import PieceSelectionManager
 from src.torrent.piece_manager import PieceManager
 
+from src.config import *
+
 class Node:
-    def __init__(self, listen_host: str='0.0.0.0', listen_port: int=0):
+    def __init__(self, listen_host: str=DEFAULT_LISTEN_HOST, listen_port: int=DEFAULT_LISTEN_PORT):
         self.available_pieces = []
         self.my_pieces = set()
         self.state = LeecherState()
@@ -31,13 +34,13 @@ class Node:
         # Request queue and management
         self.request_queue = queue.PriorityQueue()
         self.pending_requests = {} # {piece_id: timestamp}
-        self.max_parallel_requests = 16  # Maximum concurrent piece requests
-        self.request_timeout = 60  # Timeout in seconds
+        self.max_parallel_requests = DEFAULT_MAX_PARALLEL_REQUESTS  # Maximum concurrent piece requests
+        self.request_timeout = DEFAULT_REQUEST_TIMEOUT  # Timeout in seconds
 
         # Choking management
         self.choked_peers = set()
         self.unchoked_peers = set()
-        self.max_unchoked = 4
+        self.max_unchoked = DEFAULT_MAX_UNCHOKED_PEERS
 
         # Piece management
         self.piece_manager = None
@@ -54,7 +57,7 @@ class Node:
         # Strategy system components
         self.upload_manager = UploadSlotManager()
         self.piece_selection_manager = None
-        self.max_pipeline_depth = 5
+        self.max_pipeline_depth = DEFAULT_PIPELINE_DEPTH
 
     def start(self) -> None:
         """Start the node's networking components."""
@@ -67,7 +70,7 @@ class Node:
 
         actual_port = self.server_socket.getsockname()[1]
         self.listen_port = actual_port
-        self.server_socket.listen(5)
+        self.server_socket.listen(SOCKET_LISTEN_BACKLOG)
 
         ip = self.discover_public_ip()
         self.address = f"{ip}:{actual_port}"
@@ -88,21 +91,17 @@ class Node:
         timeout_thread = threading.Thread(target=self._check_request_timeouts, daemon=True)
         timeout_thread.start()
 
-        print(f"Node started at {self.address}")
+        logging.info(f"Node started at {self.address}")
 
     def discover_public_ip(self) -> str:
         """Try to discover public IP address for NAT traversal"""
         # Try multiple STUN-like services
-        services = [
-            ("stun.l.google.com", 19302),
-            ("stun1.l.google.com", 19302),
-            ("stun.ekiga.net", 3478)
-        ]
+        services = STUN_SERVERS
         
         for host, port in services:
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                s.settimeout(0.5)
+                s.settimeout(STUN_TIMEOUT)
                 s.connect((host, port))
                 ip = s.getsockname()[0]
                 s.close()
@@ -117,7 +116,7 @@ class Node:
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             # Doesn't actually connect but sets up routing
-            s.connect(("8.8.8.8", 80))
+            s.connect(PUBLIC_IP_FALLBACK_SERVER)
             ip = s.getsockname()[0]
             return ip
         except Exception:
@@ -132,7 +131,7 @@ class Node:
             try:
                 client_socket, address = self.server_socket.accept()
                 peer_address = f"{address[0]}:{address[1]}"
-                print(f"Accepted connection from {peer_address}")
+                logging.info(f"Accepted connection from {peer_address}")
                 
                 # Create a socket wrapper for this connection
                 socket_wrapper = SocketWrapper(None, None)
@@ -150,7 +149,7 @@ class Node:
                     
             except Exception as e:
                 if self.running:
-                    print(f"Error accepting connection: {e}")
+                    logging.error(f"Error accepting connection: {e}", exc_info=True) # exc_info=True logs stack trace
                 time.sleep(0.1)
     
     def _process_request_queue(self) -> None:
@@ -160,12 +159,12 @@ class Node:
                 # Check if we have room for more parallel requests
                 with self.lock:
                     if len(self.pending_requests) >= self.max_parallel_requests:
-                        time.sleep(0.1)
+                        time.sleep(REQUEST_QUEUE_PROCESS_INTERVAL)
                         continue
                 
                 # Get the highest priority request
                 if self.request_queue.empty():
-                    time.sleep(0.1)
+                    time.sleep(REQUEST_QUEUE_PROCESS_INTERVAL)
                     continue
                 
                 priority, piece_id = self.request_queue.get()
@@ -188,17 +187,18 @@ class Node:
                     self.request_queue.put((priority + 10, piece_id))  # Delay retry
                 
                 # Small delay to avoid flooding
-                time.sleep(0.05)
+                time.sleep(REQUEST_FLOOD_DELAY)
                 
             except Exception as e:
-                print(f"Error processing request queue: {e}")
+                logging.error(f"Error processing request queue: {e}", exc_info=True)
+
                 time.sleep(1)
 
     def _manage_choking(self) -> None:
         """
         Periodically update which peers are choked/unchoked based on current strategy.
         """
-        choking_interval = 10  # seconds between choking decisions
+        choking_interval = CHOKING_INTERVAL  # seconds between choking decisions
         
         while self.running:
             try:
@@ -223,7 +223,7 @@ class Node:
                             self.peer_connections[peer].send(choke_msg)
                             self.unchoked_peers.remove(peer)
                             self.choked_peers.add(peer)
-                            print(f"Choking peer {peer}")
+                            logging.info(f"Choking peer {peer}")
                     
                     for peer in to_unchoke:
                         if peer in self.peer_connections:
@@ -232,11 +232,11 @@ class Node:
                             self.peer_connections[peer].send(unchoke_msg)
                             self.choked_peers.remove(peer)
                             self.unchoked_peers.add(peer)
-                            print(f"Unchoking peer {peer}")
+                            logging.info(f"Unchoking peer {peer}")
                 
                 time.sleep(choking_interval)
             except Exception as e:
-                print(f"Error in choking management: {e}")
+                logging.error(f"Error in choking management: {e}", exc_info=True)
                 time.sleep(choking_interval)
     
     def _check_request_timeouts(self) -> None:
@@ -263,9 +263,9 @@ class Node:
                 self.request_queue.put((current_time - 100, piece_id))
                 
             # Sleep for a bit
-            time.sleep(5)
+            time.sleep(REQUEST_TIMEOUT_CHECK_INTERVAL)
 
-    def connect_to_tracker(self, tracker_host: str, tracker_port: int, retry_attempts=3) -> bool:
+    def connect_to_tracker(self, tracker_host: str, tracker_port: int, retry_attempts=TRACKER_CONNECT_RETRY_ATTEMPTS) -> bool:
         """
         Connect to the tracker and register this node.
 
@@ -277,7 +277,7 @@ class Node:
         Returns:
             bool: connection success
         """
-        print(f"Connecting to tracker at {tracker_host}:{tracker_port}...")
+        logging.info(f"Connecting to tracker at {tracker_host}:{tracker_port}...")
         self.tracker_host = tracker_host
         self.tracker_port = tracker_port
         
@@ -286,7 +286,7 @@ class Node:
         # Let SocketWrapper handle all the retry logic
         if not self.tracker_connection.connect():
             self.tracker_connection = None
-            print("Failed to connect to tracker after multiple attempts!")
+            logging.info("Failed to connect to tracker after multiple attempts!")
             return False
             
         # Connected successfully
@@ -312,13 +312,13 @@ class Node:
                 self.tracker_connection.send(update_msg)
 
                 # Wait for next heartbeat
-                for _ in range(30): # 30s interval
+                for _ in range(TRACKER_HEARTBEAT_INTERVAL): # 30s interval
                     if not self.running or not self.tracker_connection:
                         return
                     time.sleep(1)
             
             except Exception as e:
-                print(f"Tracker heartbeat failed: {e}!")
+                logging.error(f"Tracker heartbeat failed: {e}!", exc_info=True)
                 self._handle_tracker_disconnection()
                 return
     
@@ -454,7 +454,7 @@ class Node:
             
             # Check completion
             if self.piece_manager.is_complete():
-                print("Download complete!")
+                logging.info("Download complete!")
                 self.state = SeederState()
     
     def _handle_peer_message(self, message: Message, address: str) -> None:
@@ -474,7 +474,7 @@ class Node:
 
         elif message.msg_type == "cancel_request":
             piece_id = message.payload.get("piece_id")
-            print(f"Received cancel request for piece {piece_id} from {address}")
+            logging.info(f"Received cancel request for piece {piece_id} from {address}")
     
     def _send_piece(self, piece_id: int, address: str) -> None:
         """
@@ -495,7 +495,7 @@ class Node:
             response = MessageFactory.piece_response(piece_id, data)
             self.peer_connections[address].send(response)
         except Exception as e:
-            print(f"Error sending piece {piece_id}: {e}")
+            logging.error(f"Error sending piece {piece_id}: {e}", exc_info=True)
     
     def download_pieces(self) -> None:
         """Queue pieces for download based on strategy"""

@@ -2,6 +2,7 @@
 import time
 import json
 import socket
+import logging
 import threading
 from src.network.messages import Message, MessageFactory
 from src.network.connection import SocketWrapper
@@ -21,8 +22,8 @@ class Subject:
 
 class Tracker(Subject):
     def __init__(self, 
-                 host: str = DEFAULTS["tracker_host"], 
-                 port: int = DEFAULTS["tracker_port"]):
+                 host: str = DEFAULT_TRACKER_HOST, 
+                 port: int = DEFAULT_TRACKER_PORT):
         super().__init__()
         self.host = host
         self.port = port
@@ -72,7 +73,7 @@ class Tracker(Subject):
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.socket.bind((self.host, self.port))
         self.socket.listen(5)
-        print(f"Tracker running on {self.host}:{self.port}")
+        logging.info(f"Tracker running on {self.host}:{self.port}")
 
         # Start health check thread
         health_thread = threading.Thread(target=self._check_peer_health, daemon=True)
@@ -88,7 +89,7 @@ class Tracker(Subject):
             try:
                 client_socket, address = self.socket.accept()
                 address_str = self._format_address(address)
-                print(f"New connection from {address_str}")
+                logging.info(f"New connection from {address_str}")
 
                 # Start client handler thread
                 client_thread = threading.Thread(
@@ -100,7 +101,7 @@ class Tracker(Subject):
 
             except Exception as e:
                 if self._running:
-                    print(f"Error accepting connection: {e}!")
+                    logging.error(f"Error accepting connection: {e}!", exc_info=True)
 
     def _handle_client(self, client_socket: socket.socket, address: tuple[str, int]) -> None:
         """Handle message from client."""
@@ -108,7 +109,7 @@ class Tracker(Subject):
             buffer = bytearray()
 
             while self._running:
-                data = client_socket.recv(4096)
+                data = client_socket.recv(SOCKET_BUFFER_SIZE)
                 if not data:
                     break
 
@@ -124,7 +125,7 @@ class Tracker(Subject):
                     pass
 
         except Exception as e:
-            print(f"Error handling client {self._format_address(address)}: {e}!")
+            logging.error(f"Error handling client {self._format_address(address)}: {e}!", exc_info=True)
         
         finally:
             client_socket.close()
@@ -150,7 +151,7 @@ class Tracker(Subject):
     def _check_peer_health(self):
         """Check and remove inactive peers periodically"""
         while self._running:
-            time.sleep(60)  # Check every minute
+            time.sleep(PEER_HEALTH_CHECK_INTERVAL)  # Check every minute
             self._perform_health_check()
             
     def _perform_health_check(self):
@@ -161,7 +162,7 @@ class Tracker(Subject):
         with self.lock:
             for address, info in self.active_peers.items():
                 # If peer hasn't been seen in 5 minutes, consider it disconnected
-                if current_time - info["last_seen"] > 300:
+                if current_time - info["last_seen"] > PEER_INACTIVITY_TIMEOUT:
                     peers_to_remove.append(address)
         
             # Remove inactive peers
@@ -195,9 +196,9 @@ class Tracker(Subject):
                 self.active_peers[peer_address]["pieces"] = pieces
                 self.active_peers[peer_address]["last_seen"] = time.time()
             else:
-                print(f"DEBUG: {pieces}")
-                print(f"Peer address not found in active_peers: {self._format_address(address)}")
-                print(f"Current active peers: {list(self.active_peers.keys())}")
+                logging.debug(f"Attempting to update pieces for {peer_address}. Data: {pieces}")
+                logging.warning(f"Peer address {peer_address} not found in active_peers during piece update.") 
+                logging.info(f"Current active peers: {list(self.active_peers.keys())}")
 
     def get_all_peers(self) -> list[dict[str, list[int]]]:
         """Get a list of all active peers and their pieces."""
