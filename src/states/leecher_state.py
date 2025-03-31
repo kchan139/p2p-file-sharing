@@ -189,6 +189,9 @@ class LeecherState:
     def update(self):
         self.current_state.update()
 
+    def exit(self):
+        self.current_state.exit()
+
     def handle_piece_completed(self, piece_id: int):
         """Forward piece completion to current state."""
         self.current_state.handle_piece_complete(piece_id)
