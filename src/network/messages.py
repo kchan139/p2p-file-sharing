@@ -1,6 +1,6 @@
 # src/network/messages.py
 import json
-from typing import Dict, List, Any, Union
+from typing import Dict, List, Any, Optional
 
 class Message:
     """Base Message class with serialization hooks."""
@@ -38,19 +38,22 @@ class Message:
         return json.dumps(data).encode('utf-8')
     
     @classmethod
-    def deserialize(cls, data: bytes) -> 'Message':
+    def deserialize(cls, data: bytes) -> Optional['Message']:
         """
-        Convert bytes back to Message object, with type validation
-
+        Convert bytes to Message object, with type validation and handling of incomplete data
+        
         Args:
             data(bytes): the bytes to deserialize
-
+            
         Returns:
-            Message: a message instance
+            Optional[Message]: a message instance or None if data is incomplete
+            
+        Raises:
+            ValueError: if data is complete but invalid
         """
         try:
             decoded = json.loads(data.decode('utf-8'))
-
+            
             # Validate message structure
             if not isinstance(decoded, dict):
                 raise ValueError("Invalid message: not a dictionary!")
@@ -64,8 +67,12 @@ class Message:
                 raise ValueError(f"Invalid message type: {msg_type}")
             
             return cls(msg_type, decoded["payload"])
-
-        except json.JSONDecodeError:
+        
+        except json.JSONDecodeError as e:
+            # Check if this is an incomplete message
+            if "Expecting value" in str(e) or "Unterminated string" in str(e):
+                return None  # Signal incomplete data
+            # Otherwise it's malformed JSON, not just incomplete
             raise ValueError("Failed to decode the message: invalid JSON!")
         
 class MessageFactory:
