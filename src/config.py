@@ -27,7 +27,6 @@ TRACKER_RECONNECT_DELAY = 5 # seconds
 TRACKER_CONNECT_RETRY_ATTEMPTS = 3
 REQUEST_QUEUE_PROCESS_INTERVAL = 0.1 # seconds
 REQUEST_TIMEOUT_CHECK_INTERVAL = 5 # seconds
-# Consider more descriptive names if needed
 REQUEUE_PRIORITY_BOOST = 10 # Simple offset used in requeueing
 REQUEST_FLOOD_DELAY = 0.05 # Small delay in request processing loop
 
@@ -36,6 +35,7 @@ DEFAULT_TRACKER_HOST = '0.0.0.0'
 DEFAULT_TRACKER_PORT = 8080 # Example default tracker port
 PEER_HEALTH_CHECK_INTERVAL = 60 # seconds
 PEER_INACTIVITY_TIMEOUT = 300 # seconds (5 minutes)
+MAX_MESSAGE_SIZE = 1024 * 1024  # 1MB max message buffer size
 
 # --- Piece Management (Example) ---
 DEFAULT_OUTPUT_DIR = './data'

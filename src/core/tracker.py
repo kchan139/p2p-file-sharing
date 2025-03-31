@@ -40,31 +40,7 @@ class Tracker(Subject):
 
     def _find_peer_address(self, address) -> str:
         """Find the canonical address key for a peer in active_peers."""
-        std_address = self._format_address(address)
-        if std_address in self.active_peers:
-            return std_address
-        
-        # Special case for localhost/127.0.0.1 connections
-        if isinstance(address, tuple) and address[0] == "127.0.0.1":
-            # Try to find any peer in active_peers (for testing scenarios)
-            if len(self.active_peers) == 1:
-                # If we only have one peer, assume it's the one
-                return list(self.active_peers.keys())[0]
-            
-            # If multiple peers, try to match by port
-            for peer_addr in self.active_peers:
-                if peer_addr.endswith(f":{address[1]}"):
-                    return peer_addr
-        
-        # General IP matching as fallback
-        if isinstance(address, tuple):
-            ip = address[0]
-            for peer_addr in self.active_peers:
-                # Match only if IP is a full component
-                if peer_addr.startswith(f"{ip}:"):
-                    return peer_addr
-                
-        return std_address
+        return self._format_address(address)
 
     def start(self) -> None:
         """Start the tracker server."""
@@ -105,16 +81,23 @@ class Tracker(Subject):
 
     def _handle_client(self, client_socket: socket.socket, address: tuple[str, int]) -> None:
         """Handle message from client."""
+        peer_address = self._format_address(address)
+        
         try:
             buffer = bytearray()
-
+            
             while self._running:
                 data = client_socket.recv(SOCKET_BUFFER_SIZE)
                 if not data:
                     break
-
+                
                 buffer.extend(data)
-
+                
+                # Check buffer overflow
+                if len(buffer) > MAX_MESSAGE_SIZE:
+                    logging.error(f"Buffer overflow from {peer_address}, closing connection")
+                    break
+                    
                 # Process message
                 try:
                     message = Message.deserialize(bytes(buffer))
@@ -125,23 +108,27 @@ class Tracker(Subject):
                     pass
 
         except Exception as e:
-            logging.error(f"Error handling client {self._format_address(address)}: {e}!", exc_info=True)
+            logging.error(f"Error handling client {peer_address}: {e}!", exc_info=True)
         
         finally:
             client_socket.close()
-            self._remove_peer(address)
+            self._remove_peer(peer_address)
 
     def _process_message(self, message: Message, client_socket: socket.socket, address: tuple[str, int]) -> None:
         """Process received message."""
+        peer_address = self._format_address(address)
+        
         if message.msg_type == "peer_joined":
-            peer_address = message.payload.get("address", address)
-            peers = self.register_peer(peer_address)
+            # Use provided address if available, otherwise use the connection address
+            address_from_msg = message.payload.get("address")
+            registered_address = address_from_msg if address_from_msg else peer_address
+            peers = self.register_peer(registered_address)
             response = MessageFactory.peer_list(peers)
             client_socket.sendall(response)
 
         elif message.msg_type == "update_pieces":
             pieces = message.payload.get("pieces", [])
-            self.update_peer_pieces(address, pieces)
+            self.update_peer_pieces(peer_address, pieces)
 
         elif message.msg_type == "get_peers":
             peers = self.get_all_peers()
@@ -151,7 +138,7 @@ class Tracker(Subject):
     def _check_peer_health(self):
         """Check and remove inactive peers periodically"""
         while self._running:
-            time.sleep(PEER_HEALTH_CHECK_INTERVAL)  # Check every minute
+            time.sleep(PEER_HEALTH_CHECK_INTERVAL)
             self._perform_health_check()
             
     def _perform_health_check(self):
@@ -161,7 +148,7 @@ class Tracker(Subject):
         
         with self.lock:
             for address, info in self.active_peers.items():
-                # If peer hasn't been seen in 5 minutes, consider it disconnected
+                # If peer hasn't been seen in configured time, consider it disconnected
                 if current_time - info["last_seen"] > PEER_INACTIVITY_TIMEOUT:
                     peers_to_remove.append(address)
         
@@ -172,7 +159,7 @@ class Tracker(Subject):
     def _remove_peer(self, address) -> None:
         """Remove a peer from the active peer list."""
         with self.lock:
-            peer_address = self._find_peer_address(address)
+            peer_address = self._format_address(address)
             if peer_address in self.active_peers:
                 del self.active_peers[peer_address]
                 self.notify({"type": "peer_left", "address": peer_address})
@@ -185,20 +172,22 @@ class Tracker(Subject):
                 "last_seen": time.time(),
                 "pieces": [] # Peer has no pieces initially
             }
-            self.notify({"type": "peer_joined", "address": std_address})
+            self.notify({
+                "type": "peer_joined", 
+                "address": std_address,
+                "timestamp": time.time()
+            })
             return self.get_all_peers()
         
     def update_peer_pieces(self, address, pieces: list[int]) -> None:
         """Update the list of pieces a peer has."""
         with self.lock:
-            peer_address = self._find_peer_address(address)
+            peer_address = self._format_address(address)
             if peer_address in self.active_peers:
                 self.active_peers[peer_address]["pieces"] = pieces
                 self.active_peers[peer_address]["last_seen"] = time.time()
             else:
-                logging.debug(f"Attempting to update pieces for {peer_address}. Data: {pieces}")
-                logging.warning(f"Peer address {peer_address} not found in active_peers during piece update.") 
-                logging.info(f"Current active peers: {list(self.active_peers.keys())}")
+                logging.warning(f"Peer address {peer_address} not found in active_peers during piece update.")
 
     def get_all_peers(self) -> list[dict[str, list[int]]]:
         """Get a list of all active peers and their pieces."""
