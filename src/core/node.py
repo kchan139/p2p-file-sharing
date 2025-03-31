@@ -20,44 +20,43 @@ from src.config import *
 
 class Node:
     def __init__(self, listen_host: str=DEFAULT_LISTEN_HOST, listen_port: int=DEFAULT_LISTEN_PORT):
+        # Piece management
         self.available_pieces = []
         self.my_pieces = set()
+        self.piece_manager = None
+        self.piece_availability = {}  # {piece_id: count}
+        self.peer_pieces = {}  # {peer_address: set(piece_ids)}
+        
+        # State management
         self.state = LeecherState()
-
+        
         # Networking components
         self.listen_host = listen_host
         self.listen_port = listen_port
         self.address = None
         self.tracker_connection = None
         self.peer_connections = {} # {address: SocketWrapper}
-
-        # Request queue and management
+        self.server_socket = None
+        
+        # Request management
         self.request_queue = queue.PriorityQueue()
-        self.pending_requests = {} # {piece_id: timestamp}
-        self.max_parallel_requests = DEFAULT_MAX_PARALLEL_REQUESTS  # Maximum concurrent piece requests
-        self.request_timeout = DEFAULT_REQUEST_TIMEOUT  # Timeout in seconds
-
+        self.pending_requests = {} # {piece_id: {peer: address, timestamp: time}}
+        self.max_parallel_requests = DEFAULT_MAX_PARALLEL_REQUESTS
+        self.request_timeout = DEFAULT_REQUEST_TIMEOUT
+        
         # Choking management
         self.choked_peers = set()
         self.unchoked_peers = set()
         self.max_unchoked = DEFAULT_MAX_UNCHOKED_PEERS
-
-        # Piece management
-        self.piece_manager = None
-        self.piece_availability = {}  # {piece_id: count}
-        self.peer_pieces = {}  # {peer_address: set(piece_ids)}
-
+        self.upload_manager = UploadSlotManager(max_unchoked=self.max_unchoked)
+        
+        # Strategy components
+        self.piece_selection_manager = None
+        self.max_pipeline_depth = DEFAULT_PIPELINE_DEPTH
+        
         # Threading
         self.lock = threading.RLock()
         self.running = False
-
-        # Server socket for incoming connections
-        self.server_socket = None
-
-        # Strategy system components
-        self.upload_manager = UploadSlotManager()
-        self.piece_selection_manager = None
-        self.max_pipeline_depth = DEFAULT_PIPELINE_DEPTH
 
     def start(self) -> None:
         """Start the node's networking components."""
@@ -72,58 +71,43 @@ class Node:
         self.listen_port = actual_port
         self.server_socket.listen(SOCKET_LISTEN_BACKLOG)
 
+        # Set node address
         ip = self.discover_public_ip()
         self.address = f"{ip}:{actual_port}"
 
-        # Start accept thread
-        accept_thread = threading.Thread(target=self._accept_connections, daemon=True)
-        accept_thread.start()
-
-        # Start request processor thread
-        request_thread = threading.Thread(target=self._process_request_queue, daemon=True)
-        request_thread.start()
-
-        # Start choking manager thread
-        choking_thread = threading.Thread(target=self._manage_choking, daemon=True)
-        choking_thread.start()
-
-        # Start timeout checker thread
-        timeout_thread = threading.Thread(target=self._check_request_timeouts, daemon=True)
-        timeout_thread.start()
+        # Start threads
+        threads = [
+            threading.Thread(target=self._accept_connections, daemon=True),
+            threading.Thread(target=self._process_request_queue, daemon=True),
+            threading.Thread(target=self._update_choking_state_periodically, daemon=True),
+            threading.Thread(target=self._check_request_timeouts, daemon=True)
+        ]
+        
+        for thread in threads:
+            thread.start()
 
         logging.info(f"Node started at {self.address}")
 
     def discover_public_ip(self) -> str:
         """Try to discover public IP address for NAT traversal"""
         # Try multiple STUN-like services
-        services = STUN_SERVERS
-        
-        for host, port in services:
+        for host, port in STUN_SERVERS:
             try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                s.settimeout(STUN_TIMEOUT)
-                s.connect((host, port))
-                ip = s.getsockname()[0]
-                s.close()
-                return ip
-            except Exception:
-                if s:
-                    s.close()
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                    s.settimeout(STUN_TIMEOUT)
+                    s.connect((host, port))
+                    return s.getsockname()[0]
+            except (socket.timeout, socket.gaierror, OSError):
                 continue
         
         # Fallback to local IP if public discovery fails
-        s = None
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            # Doesn't actually connect but sets up routing
-            s.connect(PUBLIC_IP_FALLBACK_SERVER)
-            ip = s.getsockname()[0]
-            return ip
-        except Exception:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                # Doesn't actually connect but sets up routing
+                s.connect(PUBLIC_IP_FALLBACK_SERVER)
+                return s.getsockname()[0]
+        except (socket.error, OSError):
             return "127.0.0.1"
-        finally:
-            if s:
-                s.close()
     
     def _accept_connections(self) -> None:
         """Accept incoming connections from peers."""
@@ -139,7 +123,7 @@ class Node:
                 
                 # Setup callbacks and start the socket wrapper
                 socket_wrapper.register_callback(
-                    lambda message, addr=peer_address: self._handle_peer_message(message, addr)
+                    self._handle_incoming_peer_message(peer_address)
                 )
                 socket_wrapper.start()
                 
@@ -147,10 +131,20 @@ class Node:
                 with self.lock:
                     self.peer_connections[peer_address] = socket_wrapper
                     
+            except (socket.error, socket.timeout) as e:
+                if self.running:
+                    logging.error(f"Error accepting connection: {e}")
             except Exception as e:
                 if self.running:
-                    logging.error(f"Error accepting connection: {e}", exc_info=True) # exc_info=True logs stack trace
+                    logging.error(f"Unexpected error accepting connection: {e}", exc_info=True)
+            finally:
                 time.sleep(0.1)
+
+    def _handle_incoming_peer_message(self, peer_address: str):
+        """Returns a callback function for handling messages from a specific peer"""
+        def callback(message):
+            self._handle_peer_message(message, peer_address)
+        return callback
     
     def _process_request_queue(self) -> None:
         """Process the piece request queue"""
@@ -169,75 +163,71 @@ class Node:
                 
                 priority, piece_id = self.request_queue.get()
                 
-                # Find suitable peer
+                # Find suitable peer and send request
                 peer = self._select_peer_for_piece(piece_id)
                 if peer:
-                    # Send request
-                    request = MessageFactory.request_piece(piece_id)
-                    self.peer_connections[peer].send(request)
-                    
-                    # Add to pending requests
-                    with self.lock:
-                        self.pending_requests[piece_id] = {
-                            'peer': peer,
-                            'timestamp': time.time()
-                        }
+                    self._send_piece_request(piece_id, peer)
                 else:
                     # No suitable peer found, requeue with lower priority
-                    self.request_queue.put((priority + 10, piece_id))  # Delay retry
+                    new_priority = priority + REQUEUE_PRIORITY_BOOST
+                    self.request_queue.put((new_priority, piece_id))
                 
                 # Small delay to avoid flooding
                 time.sleep(REQUEST_FLOOD_DELAY)
                 
             except Exception as e:
                 logging.error(f"Error processing request queue: {e}", exc_info=True)
-
                 time.sleep(1)
 
-    def _manage_choking(self) -> None:
-        """
-        Periodically update which peers are choked/unchoked based on current strategy.
-        """
-        choking_interval = CHOKING_INTERVAL  # seconds between choking decisions
-        
+    def _send_piece_request(self, piece_id: int, peer_address: str) -> None:
+        """Send a piece request to a peer and update pending requests"""
+        if peer_address in self.peer_connections:
+            request_msg = MessageFactory.request_piece(piece_id)
+            self.peer_connections[peer_address].send(request_msg)
+            
+            # Track the request
+            with self.lock:
+                self.pending_requests[piece_id] = {
+                    'peer': peer_address,
+                    'timestamp': time.time()
+                }
+
+    def _update_choking_state_periodically(self) -> None:
+        """Periodically update which peers are choked/unchoked based on current strategy."""
         while self.running:
             try:
-                with self.lock:
-                    if not hasattr(self, 'upload_slot_manager'):
-                        # Initialize slot manager if not done already
-                        from src.strategies.choking import UploadSlotManager
-                        self.upload_slot_manager = UploadSlotManager(max_unchoked=4)
-                    
-                    # Get list of peers that should be unchoked according to strategy
-                    peers_to_unchoke = self.upload_slot_manager.get_unchoked_peers()
-                    
-                    # Find peers needing state changes
-                    to_choke = self.unchoked_peers - peers_to_unchoke
-                    to_unchoke = peers_to_unchoke - self.unchoked_peers
-                    
-                    # Apply changes
-                    for peer in to_choke:
-                        if peer in self.peer_connections:
-                            from src.network.messages import MessageFactory
-                            choke_msg = MessageFactory.choke()
-                            self.peer_connections[peer].send(choke_msg)
-                            self.unchoked_peers.remove(peer)
-                            self.choked_peers.add(peer)
-                            logging.info(f"Choking peer {peer}")
-                    
-                    for peer in to_unchoke:
-                        if peer in self.peer_connections:
-                            from src.network.messages import MessageFactory
-                            unchoke_msg = MessageFactory.unchoke()
-                            self.peer_connections[peer].send(unchoke_msg)
-                            self.choked_peers.remove(peer)
-                            self.unchoked_peers.add(peer)
-                            logging.info(f"Unchoking peer {peer}")
-                
-                time.sleep(choking_interval)
+                self._update_choking_state()
+                time.sleep(CHOKING_INTERVAL)
             except Exception as e:
                 logging.error(f"Error in choking management: {e}", exc_info=True)
-                time.sleep(choking_interval)
+                time.sleep(CHOKING_INTERVAL)
+                
+    def _update_choking_state(self) -> None:
+        """Update which peers should be choked/unchoked according to strategy"""
+        with self.lock:
+            # Get list of peers that should be unchoked according to strategy
+            peers_to_unchoke = self.upload_manager.get_unchoked_peers()
+            
+            # Find peers needing state changes
+            to_choke = self.unchoked_peers - peers_to_unchoke
+            to_unchoke = peers_to_unchoke - self.unchoked_peers
+            
+            # Apply changes
+            for peer in to_choke:
+                if peer in self.peer_connections:
+                    choke_msg = MessageFactory.choke()
+                    self.peer_connections[peer].send(choke_msg)
+                    self.unchoked_peers.remove(peer)
+                    self.choked_peers.add(peer)
+                    logging.info(f"Choking peer {peer}")
+            
+            for peer in to_unchoke:
+                if peer in self.peer_connections:
+                    unchoke_msg = MessageFactory.unchoke()
+                    self.peer_connections[peer].send(unchoke_msg)
+                    self.choked_peers.remove(peer)
+                    self.unchoked_peers.add(peer)
+                    logging.info(f"Unchoking peer {peer}")
     
     def _check_request_timeouts(self) -> None:
         """Check for piece request timeouts and requeue them."""
@@ -246,21 +236,24 @@ class Node:
                 time.sleep(1)
                 continue
                 
-            # Check for timed out pieces in piece manager
-            timed_out = self.piece_manager.check_timeouts(self.request_timeout)
-            
-            # Also check our own pending requests
             current_time = time.time()
-            with self.lock:
-                for piece_id, timestamp in list(self.pending_requests.items()):
-                    if current_time - timestamp > self.request_timeout:
-                        del self.pending_requests[piece_id]
-                        timed_out.append(piece_id)
+            timed_out_pieces = []
             
-            # Requeue timed out pieces
-            for piece_id in timed_out:
-                # Use higher priority for timed out pieces
-                self.request_queue.put((current_time - 100, piece_id))
+            # Check for timed out pieces in piece manager
+            timed_out_pieces.extend(self.piece_manager.check_timeouts(self.request_timeout))
+            
+            # Check our own pending requests
+            with self.lock:
+                for piece_id, request_info in list(self.pending_requests.items()):
+                    if current_time - request_info['timestamp'] > self.request_timeout:
+                        logging.debug(f"Request for piece {piece_id} timed out")
+                        del self.pending_requests[piece_id]
+                        timed_out_pieces.append(piece_id)
+            
+            # Requeue timed out pieces with high priority
+            for piece_id in timed_out_pieces:
+                priority = current_time - REQUEUE_PRIORITY_BOOST * 10  # Higher priority for timeouts
+                self.request_queue.put((priority, piece_id))
                 
             # Sleep for a bit
             time.sleep(REQUEST_TIMEOUT_CHECK_INTERVAL)
@@ -312,7 +305,7 @@ class Node:
                 self.tracker_connection.send(update_msg)
 
                 # Wait for next heartbeat
-                for _ in range(TRACKER_HEARTBEAT_INTERVAL): # 30s interval
+                for _ in range(TRACKER_HEARTBEAT_INTERVAL): 
                     if not self.running or not self.tracker_connection:
                         return
                     time.sleep(1)
@@ -321,6 +314,45 @@ class Node:
                 logging.error(f"Tracker heartbeat failed: {e}!", exc_info=True)
                 self._handle_tracker_disconnection()
                 return
+
+    def _handle_tracker_disconnection(self) -> None:
+        """Handle tracker connection loss."""
+        logging.warning("Lost connection to tracker")
+        with self.lock:
+            self.tracker_connection = None
+        
+        # Attempt reconnection after delay if node still running
+        if self.running:
+            threading.Timer(
+                TRACKER_RECONNECT_DELAY, 
+                lambda: self.connect_to_tracker(self.tracker_host, self.tracker_port)
+            ).start()
+
+    def _connect_to_peer(self, peer_address: str) -> bool:
+        """Establish connection to a peer"""
+        try:
+            host, port_str = peer_address.split(":")
+            port = int(port_str)
+            
+            socket_wrapper = SocketWrapper(host, port)
+            if not socket_wrapper.connect():
+                logging.warning(f"Failed to connect to peer {peer_address}")
+                return False
+                
+            socket_wrapper.register_callback(
+                self._handle_incoming_peer_message(peer_address)
+            )
+            socket_wrapper.start()
+            
+            with self.lock:
+                self.peer_connections[peer_address] = socket_wrapper
+                
+            logging.info(f"Connected to peer {peer_address}")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error connecting to peer {peer_address}: {e}")
+            return False
     
     def _handle_tracker_message(self, message: Message) -> None:
         """Process messages from the tracker."""
@@ -414,33 +446,24 @@ class Node:
         self.choked_peers = set(self.peer_connections.keys()) - peers_to_unchoke    
     
     def _handle_piece_received(self, piece_id: int, data: bytes) -> None:
-        """
-        Process a received piece.
-        
-        Args:
-            piece_id: ID of the received piece
-            data: Raw piece data
-        """
+        """Process a received piece."""
+        # Extract peer address from pending requests
         peer_address = None
-        
         with self.lock:
-            # Retrieve and remove the pending request entry
             request_entry = self.pending_requests.pop(piece_id, None)
             if request_entry:
-                # Get the peer address from the request metadata
                 peer_address = request_entry.get('peer')
-
-        # Update statistics if we know the source peer
-        if peer_address and hasattr(self, 'upload_manager'):
-            self.upload_manager.update_peer_stats(
-                peer_address, 
-                bytes_downloaded=len(data)
-            )
 
         # Verify and store the piece
         success = self.piece_manager.receive_piece(piece_id, data)
         
-        if success:
+        # Update statistics if we know the source peer
+        if success and peer_address and hasattr(self, 'upload_manager'):
+            self.upload_manager.update_peer_stats(
+                peer_address, 
+                bytes_downloaded=len(data)
+            )
+            
             self.my_pieces.add(piece_id)
             
             # Update tracker
@@ -456,6 +479,32 @@ class Node:
             if self.piece_manager.is_complete():
                 logging.info("Download complete!")
                 self.state = SeederState()
+
+    def _send_piece(self, piece_id: int, address: str) -> None:
+        """
+        Send a piece to a peer.
+        
+        Args:
+            piece_id: ID of the piece to send
+            address: Address of the peer to send to
+        """
+        if address not in self.peer_connections:
+            return
+            
+        try:
+            data = self.piece_manager.get_piece_data(piece_id)
+            if not data:
+                logging.error(f"Failed to retrieve data for piece {piece_id}")
+                return
+                
+            response = MessageFactory.piece_response(piece_id, data)
+            self.peer_connections[address].send(response)
+        except IOError as e:
+            logging.error(f"I/O error sending piece {piece_id}: {e}")
+        except socket.error as e:
+            logging.error(f"Socket error sending piece {piece_id}: {e}")
+        except Exception as e:
+            logging.error(f"Error sending piece {piece_id}: {e}", exc_info=True)
     
     def _handle_peer_message(self, message: Message, address: str) -> None:
         """Handle message from peers."""
@@ -476,27 +525,6 @@ class Node:
             piece_id = message.payload.get("piece_id")
             logging.info(f"Received cancel request for piece {piece_id} from {address}")
     
-    def _send_piece(self, piece_id: int, address: str) -> None:
-        """
-        Send a piece to a peer.
-        
-        Args:
-            piece_id: ID of the piece to send
-            address: Address of the peer to send to
-        """
-        if address not in self.peer_connections:
-            return
-            
-        try:
-            data = self.piece_manager.get_piece_data(piece_id)
-            if not isinstance(data, bytes):
-                raise ValueError(f"Invalid piece data type: {type(data)}")
-                
-            response = MessageFactory.piece_response(piece_id, data)
-            self.peer_connections[address].send(response)
-        except Exception as e:
-            logging.error(f"Error sending piece {piece_id}: {e}", exc_info=True)
-    
     def download_pieces(self) -> None:
         """Queue pieces for download based on strategy"""
         if not self.available_pieces or not self.piece_manager:
@@ -516,16 +544,8 @@ class Node:
             if peer:
                 self._request_piece_from_peer(piece_id, peer)
     
-    def _request_piece(self, piece_id: int) -> bool:
-        """
-        Queue a piece for requesting.
-        
-        Args:
-            piece_id: ID of the piece to request
-            
-        Returns:
-            bool: True if piece was queued, False otherwise
-        """
+    def _queue_piece_request(self, piece_id: int) -> bool:
+        """Queue a piece for requesting."""
         if not self.piece_manager:
             return False
             
@@ -568,18 +588,25 @@ class Node:
         Args:
             state_type(NodeStateType): the type of state to transition to
         """
+        # Handle seeder state transition
         if state_type == NodeStateType.SEEDING:
+            if isinstance(self.state, LeecherState):
+                self.state.exit()
             self.state = SeederState()
             self.state.set_node(self)
             self.state.enter()
-
-        else:
-            if isinstance(self.state, LeecherState):
-                self.state.transition_to(state_type)
-            else:
-                self.state = LeecherState()
-                self.state.set_node(self)
-                self.state.transition_to(state_type)
+            return
+        
+        # Handle leecher state transitions
+        if isinstance(self.state, SeederState):
+            # Transitioning from seeder to leecher state
+            self.state.exit()
+            self.state = LeecherState()
+            self.state.set_node(self)
+        
+        # Now in leecher state, transition to specific substate
+        if isinstance(self.state, LeecherState):
+            self.state.transition_to(state_type)
 
     def request_peers_from_tracker(self):
         """Request peer list from tracker"""
