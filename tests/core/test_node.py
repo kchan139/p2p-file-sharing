@@ -41,26 +41,26 @@ class TestNode(unittest.TestCase):
         self.assertIsNotNone(self.node.piece_manager)
         self.assertEqual(len(self.node.piece_availability), 3)
         
-    def test_request_piece(self):
+    def test_queue_piece_request(self):
         """Test requesting a piece"""
         # Setup
         self.mock_piece_manager.mark_piece_in_progress.return_value = True
         
         # Test requesting a piece
-        result = self.node._request_piece(1)
+        result = self.node._queue_piece_request(1)
         
         # Verify
         self.assertTrue(result)
         self.mock_piece_manager.mark_piece_in_progress.assert_called_once_with(1)
         self.assertEqual(self.node.request_queue.qsize(), 1)
         
-    def test_request_piece_already_in_progress(self):
+    def test_queue_piece_request_already_in_progress(self):
         """Test requesting a piece that's already in progress"""
         # Setup
         self.mock_piece_manager.mark_piece_in_progress.return_value = False
         
         # Test
-        result = self.node._request_piece(1)
+        result = self.node._queue_piece_request(1)
         
         # Verify
         self.assertFalse(result)
