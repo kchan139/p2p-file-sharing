@@ -10,7 +10,7 @@ class RarestFirstStrategy(PieceSelectionStrategy):
     to improve overall swarm health.
     """
 
-    def select_next_pieces(self, needed_pieces, peer_pieces, in_progress_pieces, max_pipeline_depth=5) -> List[int]:
+    def select_next_piece(self, needed_pieces, peer_pieces, in_progress_pieces, max_pipeline_depth=5) -> List[int]:
         """
         Select the rarest piece to download next
 
@@ -52,7 +52,7 @@ class RandomFirstPiecesStrategy(PieceSelectionStrategy):
         """
         self.threshold = threshold
         
-    def select_next_pieces(self, needed_pieces: List[int], 
+    def select_next_piece(self, needed_pieces: List[int], 
                           peer_pieces: Dict[str, Set[int]],
                           in_progress_pieces: Dict[int, float],
                           max_pipeline_depth: int = 5) -> List[int]:
@@ -110,10 +110,10 @@ class PieceSelectionManager:
         else:
             self.in_progress_pieces[piece_id] = progress
             
-    def select_next_pieces(self, needed_pieces: List[int], 
+    def select_next_piece(self, needed_pieces: List[int], 
                           peer_pieces: Dict[str, Set[int]]) -> List[int]:
         """Select the next pieces to download"""
-        return self.active_strategy.select_next_pieces(
+        return self.active_strategy.select_next_piece(
             needed_pieces,
             peer_pieces,
             self.in_progress_pieces,

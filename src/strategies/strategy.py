@@ -24,7 +24,7 @@ class PieceSelectionStrategy(ABC):
     """Abstract base class for piece selection strategies."""
 
     @abstractmethod
-    def select_next_pieces(self, needed_pieces: List[int],
+    def select_next_piece(self, needed_pieces: List[int],
                            peer_pieces: Dict[str, Set[int]],
                            in_progress_pieces: Dict[int, float],
                            max_pipeline_depth: int=5) -> List[int]:
