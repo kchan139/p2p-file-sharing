@@ -22,6 +22,33 @@ pip install -r requirements.txt # Install dependencies
 
 ---
 
+## 🚀 Running Instructions
+
+### Quick Demo
+Run a complete demonstration with one tracker, one seeder, and two leechers:
+```bash
+python main.py demo --torrent test/demo_file.torrent
+```
+
+### Run Individual Components
+
+#### 1. Start a Tracker
+```bash
+python main.py tracker --host 127.0.0.1 --port 8080
+```
+
+#### 2. Start a Seeder
+```bash
+python main.py seeder --torrent test/demo_file.torrent --dir data/seeder --tracker-host 127.0.0.1 --tracker-port 8080
+```
+
+#### 3. Start a Leecher
+```bash
+python main.py leecher --torrent test/demo_file.torrent --dir data/leecher --tracker-host 127.0.0.1 --tracker-port 8080
+```
+
+---
+
 ## 📂 Project Structure
 ```
 P2P File Sharing/
