@@ -12,7 +12,9 @@ class Message:
         "update_pieces",
         "get_peers",
         "cancel_request",
-        "stopped"
+        "stopped",
+        "interested",
+        "not_interested"
     ]
 
     def __init__(self, msg_type: str, payload: Dict[str, Any]):
@@ -181,3 +183,13 @@ class MessageFactory:
     def stopped() -> bytes:
         message = Message("stopped", {})
         return message.serialize()
+    
+    @classmethod
+    def interested(cls):
+        """Create an 'interested' message to signal interest in peer's pieces."""
+        return Message(msg_type="interested", payload={})
+
+    @classmethod
+    def not_interested(cls):
+        """Create a 'not_interested' message to signal lack of interest."""
+        return Message(msg_type="not_interested", payload={})
