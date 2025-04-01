@@ -26,6 +26,7 @@ class Node:
         self.piece_manager = None
         self.piece_availability = {}  # {piece_id: count}
         self.peer_pieces = {}  # {peer_address: set(piece_ids)}
+        self.peer_interested = {} # {peer_address: bool}
         
         # State management
         self.state = LeecherState()
@@ -212,9 +213,8 @@ class Node:
             to_choke = self.unchoked_peers - peers_to_unchoke
             to_unchoke = peers_to_unchoke - self.unchoked_peers
             
-            # Apply changes
             for peer in to_choke:
-                if peer in self.peer_connections:
+                if peer in self.peer_connections and peer in self.unchoked_peers:
                     choke_msg = MessageFactory.choke()
                     self.peer_connections[peer].send(choke_msg)
                     self.unchoked_peers.remove(peer)
@@ -222,7 +222,7 @@ class Node:
                     logging.info(f"Choking peer {peer}")
             
             for peer in to_unchoke:
-                if peer in self.peer_connections:
+                if peer in self.peer_connections and peer in self.choked_peers:
                     unchoke_msg = MessageFactory.unchoke()
                     self.peer_connections[peer].send(unchoke_msg)
                     self.choked_peers.remove(peer)
@@ -235,28 +235,29 @@ class Node:
             if not self.piece_manager:
                 time.sleep(1)
                 continue
-                
-            current_time = time.time()
-            timed_out_pieces = []
-            
-            # Check for timed out pieces in piece manager
-            timed_out_pieces.extend(self.piece_manager.check_timeouts(self.request_timeout))
-            
-            # Check our own pending requests
-            with self.lock:
-                for piece_id, request_info in list(self.pending_requests.items()):
-                    if current_time - request_info['timestamp'] > self.request_timeout:
-                        logging.debug(f"Request for piece {piece_id} timed out")
-                        del self.pending_requests[piece_id]
-                        timed_out_pieces.append(piece_id)
-            
-            # Requeue timed out pieces with high priority
-            for piece_id in timed_out_pieces:
-                priority = current_time - REQUEUE_PRIORITY_BOOST * 10  # Higher priority for timeouts
-                self.request_queue.put((priority, piece_id))
-                
-            # Sleep for a bit
+            self._process_timeout_checks()
             time.sleep(REQUEST_TIMEOUT_CHECK_INTERVAL)
+
+    def _process_timeout_checks(self) -> None:
+        """Perform timeout checks and requeue pieces."""
+        current_time = time.time()
+        timed_out_pieces = []
+
+        # Check for timed out pieces in piece manager
+        timed_out_pieces.extend(self.piece_manager.check_timeouts(self.request_timeout))
+
+        # Check our own pending requests
+        with self.lock:
+            for piece_id, request_info in list(self.pending_requests.items()):
+                if current_time - request_info['timestamp'] > self.request_timeout:
+                    logging.debug(f"Request for piece {piece_id} timed out")
+                    del self.pending_requests[piece_id]
+                    timed_out_pieces.append(piece_id)
+
+        # Requeue timed out pieces with high priority
+        for piece_id in timed_out_pieces:
+            priority = current_time - REQUEUE_PRIORITY_BOOST * 10  # Higher priority for timeouts
+            self.request_queue.put((priority, piece_id))
 
     def connect_to_tracker(self, tracker_host: str, tracker_port: int, retry_attempts=TRACKER_CONNECT_RETRY_ATTEMPTS) -> bool:
         """
@@ -445,7 +446,7 @@ class Node:
                 self.peer_connections[peer].send(MessageFactory.choke())
         
         self.unchoked_peers = peers_to_unchoke
-        self.choked_peers = set(self.peer_connections.keys()) - peers_to_unchoke    
+        self.choked_peers = set(self.peer_connections.keys()) - peers_to_unchoke
     
     def _handle_piece_received(self, piece_id: int, data: bytes) -> None:
         """Process a received piece."""
@@ -518,12 +519,31 @@ class Node:
             piece_id = message.payload.get("piece_id")
             logging.debug(f"Received request for piece {piece_id} from {address}")
             
-            if piece_id in self.my_pieces and address in self.unchoked_peers:
+            # Check if we have the piece AND peer is unchoked AND peer is interested
+            if (piece_id in self.my_pieces 
+                and address in self.unchoked_peers 
+                and self.peer_interested.get(address, False)):
                 logging.info(f"Sending piece {piece_id} to {address}")
                 self._send_piece(piece_id, address)
             else:
-                reason = "piece not available" if piece_id not in self.my_pieces else "peer is choked"
+                reason = "piece not available" if piece_id not in self.my_pieces \
+                    else "peer is choked" if address not in self.unchoked_peers \
+                    else "peer not interested"
                 logging.debug(f"Rejected piece request {piece_id} from {address}: {reason}")
+
+        elif message.msg_type == "interested":
+            # Mark peer as interested in our pieces
+            self.peer_interested[address] = True
+            logging.debug(f"Peer {address} is now interested")
+            
+            # Request immediate choke decision update
+            if hasattr(self, 'upload_manager'):
+                self.update_choking()
+                
+        elif message.msg_type == "not_interested":
+            # Mark peer as not interested in our pieces
+            self.peer_interested[address] = False
+            logging.debug(f"Peer {address} is no longer interested")
 
         elif message.msg_type == "piece_response":
             piece_id = message.payload.get("piece_id")
@@ -544,22 +564,6 @@ class Node:
         elif message.msg_type == "cancel_request":
             piece_id = message.payload.get("piece_id")
             logging.info(f"Received cancel request for piece {piece_id} from {address}")
-
-        elif message.msg_type == "interested":
-            # Mark peer as interested in our pieces
-            if address in self.peer_connections:
-                self.peer_connections[address].peer_interested = True
-                logging.debug(f"Peer {address} is now interested")
-                
-                # Request immediate choke decision update
-                if hasattr(self, 'upload_manager'):
-                    self.upload_manager.update_choked_peers()
-                    
-        elif message.msg_type == "not_interested":
-            # Mark peer as not interested in our pieces
-            if address in self.peer_connections:
-                self.peer_connections[address].peer_interested = False
-                logging.debug(f"Peer {address} is no longer interested")
             
         else:
             logging.debug(f"Unhandled message type '{message.msg_type}' from {address}")
