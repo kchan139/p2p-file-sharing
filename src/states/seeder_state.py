@@ -1,5 +1,6 @@
 # src/states/seeder_state.py  
 import time
+import logging
 from typing import Dict
 
 from src.states.node_state import NodeState, NodeStateType
@@ -38,14 +39,14 @@ class SeederState(NodeState):
     #     self.current_state.enter()
 
     def enter(self):
-        print("Entered seeding state.")
+        logging.info("Entered seeding state")
         self.rate_measurement_start = time.time()
 
         if self.node and hasattr(self.node, 'announce_completion_to_tracker'):
             self.node.announce_completion_to_tracker()
 
     def exit(self):
-        print("Exiting seeding state.")
+        logging.info("Exiting seeding state")
 
     def update(self):
         # Handle upload rate limiting
@@ -120,7 +121,7 @@ class SeederState(NodeState):
 
     def prepare_graceful_shutdown(self):
         """Prepare for graceful termination."""
-        print("Preparing for graceful termination...")
+        logging.info("Preparing for graceful termination..")
 
         if self.node and hasattr(self.node, 'announce_stopping_to_tracker'):
             self.node.announce_stopping_to_tracker()

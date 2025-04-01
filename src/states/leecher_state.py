@@ -1,5 +1,6 @@
 # src/states/leecher_state.py
 import time
+import logging
 from typing import List
 
 from src.states.node_state import NodeState, NodeStateType
@@ -15,7 +16,7 @@ class PeerDiscoveryState(NodeState):
         self.discovery_timeout = 30 # seconds
 
         self.start_time = time.time()
-        print("Entered peer discovery state.")
+        logging.info("Entered peer discovery state")
 
         # Request peers from tracker if connected
         if self.node and self.node.tracker_connection:
@@ -23,13 +24,13 @@ class PeerDiscoveryState(NodeState):
 
     def enter(self):
         self.start_time = time.time()
-        print("Entered peer discovery state.")
+        logging.info("Entered peer discovery state")
 
         if self.node and self.node.tracker_connection:
             self.node.request_peers_from_tracker()
 
     def exit(self):
-        print("Exiting peer discovery state.")
+        logging.info("Exiting peer discovery state")
 
     def update(self):
         # Check if we have enough peers
@@ -61,13 +62,13 @@ class DownloadingState(NodeState):
         self.endgame_threshold = 0.95 # 95% complete
 
     def enter(self):
-        print("Entered downloading state.")
+        logging.info("Entered downloading state")
 
         if self.node:
             self.node.download_pieces()
 
     def exit(self):
-        print("Exiting downloading state.")
+        logging.info("Exiting downloading state")
 
     def update(self):
         if not self.node or not self.node.piece_manager:
@@ -101,12 +102,12 @@ class EndgameState(NodeState):
         super().__init__()
 
     def enter(self):
-        print("Entered endgame state.")
+        logging.info("Entered endgame state")
         if self.node:
             self._request_all_remaining_pieces()
 
     def exit(self):
-        print("Exiting endgame state.")
+        logging.info("Exiting endgame state")
 
     def update(self):
         if not self.node or not self.node.piece_manager:
@@ -156,7 +157,7 @@ class EndgameState(NodeState):
                 cancel_msg = MessageFactory.cancel_request(piece_id)
                 self.node.peer_connections[peer_address].send(cancel_msg)
 
-        print(f"Piece {piece_id} completed, canceling duplicates")
+        logging.info(f"Piece {piece_id} completed, canceling duplicates")
 
 
 class LeecherState:
