@@ -1,5 +1,6 @@
 # tests/core/test_node.py
 import time
+import socket
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -186,6 +187,101 @@ class TestNode(unittest.TestCase):
         mock_connection.send.assert_called_once()
         args = mock_connection.send.call_args[0][0]
         assert expected_data.encode() in args
+
+    @patch('socket.socket')
+    def test_discover_public_ip_fallback(self, mock_socket):
+        """Test IP discovery falls back to local when STUN fails"""
+        mock_socket_instance = MagicMock()
+        mock_socket.return_value.__enter__.return_value = mock_socket_instance
+
+        # Set the side effect for connect to simulate STUN failure
+        mock_socket_instance.connect.side_effect = socket.error
+        ip = self.node.discover_public_ip()
+
+        self.assertEqual(ip, "127.0.0.1")
+
+    @patch('src.core.node.SocketWrapper')
+    def test_connect_to_tracker_success(self, mock_wrapper):
+        """Test successful tracker connection"""
+        mock_instance = mock_wrapper.return_value
+        mock_instance.connect.return_value = True
+        result = self.node.connect_to_tracker('tracker', 1234)
+        self.assertTrue(result)
+        mock_instance.start.assert_called_once()
+
+    @patch('src.core.node.SocketWrapper')
+    def test_connect_to_tracker_failure(self, mock_wrapper):
+        """Test failed tracker connection after retries"""
+        mock_wrapper.return_value.connect.return_value = False
+        result = self.node.connect_to_tracker('tracker', 1234, retry_attempts=2)
+        self.assertFalse(result)
+
+    def test_handle_interested_message(self):
+        """Test INTERESTED message updates peer state"""
+        msg = MagicMock()
+        msg.msg_type = "interested"
+        self.node._handle_peer_message(msg, 'peer1')
+        self.assertTrue(self.node.peer_interested.get('peer1', False))
+
+    def test_handle_not_interested_message(self):
+        """Test NOT_INTERESTED message updates peer state"""
+        self.node.peer_interested['peer1'] = True
+        msg = MagicMock()
+        msg.msg_type = "not_interested"
+        self.node._handle_peer_message(msg, 'peer1')
+        self.assertFalse(self.node.peer_interested.get('peer1', True))
+
+    @patch('src.core.node.MessageFactory')
+    def test_update_choking_state(self, mock_factory):
+        """Test choking/unchoking logic"""
+        peers = {'peer1': MagicMock(), 'peer2': MagicMock()}
+        self.node.peer_connections = peers
+        self.node.upload_manager.get_unchoked_peers = lambda: {'peer2'}
+        self.node.unchoked_peers.add('peer1')
+        self.node.choked_peers.add('peer2')
+        
+        self.node._update_choking_state()
+        
+        peers['peer1'].send.assert_called_once_with(mock_factory.choke())
+        peers['peer2'].send.assert_called_once_with(mock_factory.unchoke())
+
+    def test_request_timeout_handling(self):
+        """Test timeout detection and requeueing"""
+        self.node.pending_requests = {
+            1: {'peer': 'peer1', 'timestamp': time.time() - 70}
+        }
+        self.node.piece_manager.check_timeouts.return_value = [2, 3]
+        
+        self.node._process_timeout_checks()
+        
+        self.assertEqual(self.node.request_queue.qsize(), 3)
+        self.assertNotIn(1, self.node.pending_requests)
+
+    def test_invalid_piece_response(self):
+        """Test invalid piece data handling"""
+        msg = MagicMock()
+        msg.msg_type = "piece_response"
+        msg.payload = {'piece_id': 1, 'data': b'bad'.hex()}
+        self.node.pending_requests[1] = {'peer': 'peer1', 'timestamp': time.time()}
+        self.node.piece_manager.receive_piece.return_value = False
+        
+        self.node._handle_peer_message(msg, 'peer1')
+        
+        self.assertNotIn(1, self.node.my_pieces)
+
+    def test_choked_piece_request(self):
+        """Test rejection of requests from choked peers"""
+        msg = MagicMock()
+        msg.msg_type = "piece_request"
+        msg.payload = {'piece_id': 0}
+        self.node.my_pieces.add(0)
+        self.node.choked_peers.add('peer1')
+        self.node.peer_connections['peer1'] = MagicMock()
+        
+        self.node._handle_peer_message(msg, 'peer1')
+        
+        self.node.peer_connections['peer1'].send.assert_not_called()
+
 
 
 if __name__ == '__main__':
