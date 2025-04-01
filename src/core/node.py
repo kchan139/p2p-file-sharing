@@ -427,6 +427,8 @@ class Node:
         for i in range(len(pieces_hashes)):
             self.piece_availability[i] = 0
 
+        self.piece_manager.close_storage()
+
     def update_choking(self):
         """Update choking decisions based on strategy"""
         peers_to_unchoke = self.upload_manager.get_unchoked_peers()
